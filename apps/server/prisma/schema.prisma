@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Board {
+  id           String    @id @default(uuid())
+  uniqueId     String    @unique
+  macAddress   String
+  status       String    @default("OFFLINE")
+  firmwareVersion String?
+  displayAvailable Boolean @default(true)
+  connectedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  wsConnection String?
+}
+
+model Client {
+  id           String    @id @default(uuid())
+  clientId     String    @unique
+  status       String    @default("DISCONNECTED")
+  connectedAt  DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  wsConnection String?
+}
+
+model Session {
+  id          String    @id @default(uuid())
+  boardId     String
+  clientId    String
+  assignedAt  DateTime  @default(now())
+  expiresAt   DateTime
+  status      String    @default("ACTIVE")
+  board       Board     @relation(fields: [boardId], references: [id])
+  client      Client    @relation(fields: [clientId], references: [id])
+}
