@@ -1,0 +1,13 @@
+**/.DS_Store
+**/node_modules/
+**/dist/
+**/dist-electron/
+**/.dart_tool/
+**/.packages
+**/build/
+**/ios/Pods/
+**/ios/Flutter/
+**/android/.gradle/
+**/android/local.properties
+**/*.iml
+*.log
