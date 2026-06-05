@@ -89,9 +89,13 @@ erDiagram
 
 ```mermaid
 sequenceDiagram
+    participant Phone as Phone App
     participant B as Board
     participant WS as WebSocket
     participant DB as Database
+
+    Phone->>B: BLE Write (SSID/Pass/URL)
+    B->>B: Save to NVS, Connect WiFi
 
     B->>WS: CONNECT /ws/board
     B->>WS: REGISTER (boardId, firmwareVersion)
@@ -101,6 +105,11 @@ sequenceDiagram
     WS->>DB: Save Board (IDLE)
     WS->>B: ASSIGN_ID (uniqueId)
     WS->>WS: Start Heartbeat Timer
+
+    loop Phone polls for onboarding result
+        Phone->>WS: GET /api/boards/onboarding?mac=...
+        WS-->>Phone: { registered: true, board: { uniqueId: "BOARD-0001" } }
+    end
 
     loop Heartbeat
         B->>WS: HEARTBEAT
@@ -162,6 +171,7 @@ sequenceDiagram
 | GET | `/api/health` | Health check |
 | GET | `/api/boards` | List all boards |
 | GET | `/api/boards/idle` | List idle boards |
+| GET | `/api/boards/onboarding?mac=...` | Check if board registered (mobile onboarding) |
 | GET | `/api/clients` | List all clients |
 | POST | `/api/sessions` | Create session |
 | DELETE | `/api/sessions/:id` | Delete session |

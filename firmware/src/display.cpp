@@ -57,6 +57,16 @@ void displayId(const String& id) {
   tft.drawString("ID: " + id, 10, 110);
 }
 
+void displayUniqueId(const String& id) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_CYAN, TFT_BLACK);
+  tft.setTextSize(3);
+  tft.drawString(id, 20, 60);
+  tft.setTextSize(1);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("Nexio", 10, 10);
+}
+
 void displayClear() {
   tft.fillScreen(TFT_BLACK);
 }

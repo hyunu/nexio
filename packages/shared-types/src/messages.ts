@@ -11,7 +11,7 @@ export type MessageType =
   | 'AVAILABLE_BOARDS'
   | 'ERROR';
 
-export type BoardStatus = 'IDLE' | 'BUSY' | 'OFFLINE';
+export type BoardStatus = 'IDLE' | 'BUSY' | 'OFFLINE' | 'CLAIMED';
 export type ClientStatus = 'CONNECTED' | 'DISCONNECTED';
 export type SessionStatus = 'ACTIVE' | 'EXPIRED' | 'TERMINATED';
 export type DataDirection = 'B_TO_C' | 'C_TO_B';

@@ -31,6 +31,7 @@ void setup() {
   initBLE();
 
   if (loadConfig()) {
+    uniqueId = getUniqueId();
     displayStatus("Connecting WiFi...");
     connectWiFi();
   } else {
@@ -167,6 +168,9 @@ void sendRegister() {
   doc["boardId"] = WiFi.macAddress();
   doc["firmwareVersion"] = "1.0.0";
   doc["displayAvailable"] = true;
+  if (uniqueId.length() > 0) {
+    doc["uniqueId"] = uniqueId;
+  }
 
   String output;
   serializeJson(doc, output);
@@ -204,8 +208,11 @@ void sendDataToServer(const uint8_t* data, size_t len) {
   webSocketClient.sendTXT(output);
 }
 
-void onWiFiConfigured(const String& ssid, const String& pass, const String& url) {
-  saveConfig(ssid, pass, url);
+void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {
+  if (boardUniqueId.length() > 0) {
+    uniqueId = boardUniqueId;
+  }
+  saveConfig(ssid, pass, url, boardUniqueId);
   displayStatus("WiFi Configured\nConnecting...");
   connectWiFi();
 }

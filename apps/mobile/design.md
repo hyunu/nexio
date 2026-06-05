@@ -32,11 +32,14 @@ graph TB
 graph TD
     HOME[Home Screen<br/>Scan Devices] --> SELECT[Device Selection]
     SELECT --> CONFIG[Config Screen<br/>Enter WiFi]
-    CONFIG --> RESULT[Result Screen<br/>Success/Fail]
+    CONFIG --> WAITING[Waiting for Board<br/>Server Polling]
+    WAITING -->|Board Registered| SUCCESS[Onboarding Complete]
+    WAITING -->|Timeout| FAIL[Onboarding Failed]
 
     CONFIG -->|Cancel| HOME
-    RESULT -->|Retry| CONFIG
-    RESULT -->|Done| HOME
+    SUCCESS -->|Done| HOME
+    FAIL -->|Retry| CONFIG
+    FAIL -->|Done| HOME
 ```
 
 ### Screen 1: Home (Device Scan)
@@ -92,21 +95,62 @@ graph TD
 └────────────────────────────┘
 ```
 
-### Screen 3: Result
+### Screen 3: Onboarding Progress
 
 ```
 ┌────────────────────────────┐
-│ ← Result                   │
+│ ← Configure WiFi          │
 ├────────────────────────────┤
 │                            │
-│      ✓ Success!            │
+│ Device: Nexio-ESP32        │
+│ MAC: AA:BB:CC:DD:EE:FF     │
 │                            │
-│ Configuration sent.        │
-│ ESP32 will connect to       │
-│ your WiFi network.        │
+│ ┌────────────────────────┐ │
+│ │  ◎ Sending...          │ │
+│ │  ✓ Configuration sent! │ │
+│ │  ◌ Waiting for board   │ │
+│ │    to connect server…  │ │
+│ └────────────────────────┘ │
+│          ○ spinner         │
+│                            │
+│    (polling server via     │
+│     GET /api/boards/       │
+│       onboarding?mac=...)   │
+│                            │
+└────────────────────────────┘
+```
+
+### Screen 4: Result
+
+```
+┌────────────────────────────┐
+│ ← Configure WiFi          │
+├────────────────────────────┤
+│                            │
+│      ✓ Onboarding Done!    │
+│                            │
+│ Board registered as        │
+│    BOARD-0001              │
 │                            │
 │ ┌────────────────────────┐ │
 │ │     Done              │ │
+│ └────────────────────────┘ │
+└────────────────────────────┘
+```
+
+```
+┌────────────────────────────┐
+│ ← Configure WiFi          │
+├────────────────────────────┤
+│                            │
+│      ✗ Failed              │
+│                            │
+│ Board did not connect      │
+│ within 30 seconds.         │
+│ Check WiFi credentials.   │
+│                            │
+│ ┌────────────────────────┐ │
+│ │     Retry             │ │
 │ └────────────────────────┘ │
 └────────────────────────────┘
 ```
@@ -152,6 +196,7 @@ sequenceDiagram
     participant App
     participant BLE
     participant ESP
+    participant Server
 
     App->>BLE: Start Scan (with service UUID)
     BLE-->>App: Device list
@@ -165,9 +210,15 @@ sequenceDiagram
     BLE->>ESP: Save to NVS
 
     ESP->>ESP: Connect Wi-Fi
-    ESP->>BLE: Notify success
-    BLE-->>App: TX notification
-    App->>App: Show success
+    ESP->>Server: WebSocket REGISTER (MAC address)
+    Server->>Server: Save Board to DB
+
+    loop Poll every 3s (max 30s)
+        App->>Server: GET /api/boards/onboarding?mac=...
+        Server-->>App: { registered: true, board: {...} }
+    end
+
+    App->>App: Show onboarding complete
 ```
 
 ## Key Features

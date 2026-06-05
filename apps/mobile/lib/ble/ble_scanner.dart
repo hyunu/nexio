@@ -61,6 +61,10 @@ class BleScanner {
     buffer.write('"ssid":"${_escapeJson(config['ssid'] ?? '')}",');
     buffer.write('"password":"${_escapeJson(config['password'] ?? '')}",');
     buffer.write('"serverUrl":"${_escapeJson(config['serverUrl'] ?? '')}"');
+    final uniqueId = config['uniqueId'];
+    if (uniqueId != null && uniqueId.isNotEmpty) {
+      buffer.write(',"uniqueId":"${_escapeJson(uniqueId)}"');
+    }
     buffer.write('}');
     return buffer.toString();
   }

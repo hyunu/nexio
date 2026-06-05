@@ -5,6 +5,7 @@
 #define KEY_WIFI_SSID "wifi_ssid"
 #define KEY_WIFI_PASS "wifi_pass"
 #define KEY_SERVER_URL "server_url"
+#define KEY_UNIQUE_ID "unique_id"
 
 #define UART_BAUD 115200
 #define UART_TX_PIN 7

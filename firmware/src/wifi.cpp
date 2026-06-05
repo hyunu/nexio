@@ -25,6 +25,13 @@ String getServerUrl() {
   return String(url);
 }
 
+String getUniqueId() {
+  char id[16] = {0};
+  size_t len = sizeof(id);
+  nvs_get_str(nvs, KEY_UNIQUE_ID, id, &len);
+  return String(id);
+}
+
 void initWifi() {
   nvs_begin(NVS_DEFAULT_PARTITION, NVS_MODE_READWRITE);
 }
@@ -41,12 +48,15 @@ bool loadConfig() {
   return err == ESP_OK && strlen(ssid) > 0;
 }
 
-void saveConfig(const String& ssid, const String& pass, const String& url) {
+void saveConfig(const String& ssid, const String& pass, const String& url, const String& uniqueId) {
   nvs_begin(NVS_DEFAULT_PARTITION, NVS_MODE_READWRITE);
 
   nvs_set_str(nvs, KEY_WIFI_SSID, ssid.c_str());
   nvs_set_str(nvs, KEY_WIFI_PASS, pass.c_str());
   nvs_set_str(nvs, KEY_SERVER_URL, url.c_str());
+  if (uniqueId.length() > 0) {
+    nvs_set_str(nvs, KEY_UNIQUE_ID, uniqueId.c_str());
+  }
 
   nvs_commit(nvs);
   nvs_close();

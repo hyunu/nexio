@@ -10,7 +10,7 @@ datasource db {
 model Board {
   id           String    @id @default(uuid())
   uniqueId     String    @unique
-  macAddress   String
+  macAddress   String   @unique
   status       String    @default("OFFLINE")
   firmwareVersion String?
   displayAvailable Boolean @default(true)

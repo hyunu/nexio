@@ -34,11 +34,52 @@ async function start() {
     return boards;
   });
 
+  fastify.get('/api/boards/onboarding', async (request: any) => {
+    const { mac } = request.query;
+    if (!mac) {
+      return { error: 'MAC address is required' }, 400;
+    }
+    const board = await prisma.board.findFirst({
+      where: { macAddress: mac },
+    });
+    if (board) {
+      return { registered: true, board: { uniqueId: board.uniqueId, status: board.status } };
+    }
+    return { registered: false };
+  });
+
   fastify.get('/api/clients', async () => {
     const clients = await prisma.client.findMany({
       orderBy: { connectedAt: 'desc' },
     });
     return clients;
+  });
+
+  fastify.post('/api/onboarding/claim', async (request: any) => {
+    const { macAddress } = request.body;
+    if (!macAddress) {
+      return { error: 'MAC address is required' }, 400;
+    }
+
+    const existingBoard = await prisma.board.findFirst({
+      where: { macAddress },
+    });
+    if (existingBoard && existingBoard.uniqueId) {
+      return { uniqueId: existingBoard.uniqueId };
+    }
+
+    const count = await prisma.board.count();
+    const uniqueId = `BOARD-${String(count + 1).padStart(4, '0')}`;
+
+    await prisma.board.create({
+      data: {
+        uniqueId,
+        macAddress,
+        status: 'CLAIMED',
+      },
+    });
+
+    return { uniqueId };
   });
 
   fastify.post('/api/sessions', async (request: any) => {
@@ -233,32 +274,63 @@ async function start() {
 }
 
 async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: string) => void) {
-  const { type, boardId, firmwareVersion, displayAvailable, sessionId, payload, direction, id } = msg;
+  const { type, boardId, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId } = msg;
 
   if (type === 'REGISTER') {
-    const existingBoard = await prisma.board.findUnique({
-      where: { macAddress: boardId },
-    });
-
     let uniqueId: string;
-    if (existingBoard) {
-      uniqueId = existingBoard.uniqueId;
-      await prisma.board.update({
-        where: { id: existingBoard.id },
-        data: { status: 'IDLE', connectedAt: new Date(), wsConnection: 'active' },
+
+    if (preAssignedId) {
+      const claimed = await prisma.board.findUnique({
+        where: { uniqueId: preAssignedId },
       });
+      if (claimed) {
+        uniqueId = claimed.uniqueId;
+        await prisma.board.update({
+          where: { id: claimed.id },
+          data: {
+            macAddress: boardId,
+            firmwareVersion,
+            displayAvailable,
+            status: 'IDLE',
+            connectedAt: new Date(),
+          },
+        });
+      } else {
+        uniqueId = preAssignedId;
+        await prisma.board.create({
+          data: {
+            uniqueId,
+            macAddress: boardId,
+            firmwareVersion,
+            displayAvailable,
+            status: 'IDLE',
+          },
+        });
+      }
     } else {
-      const count = await prisma.board.count();
-      uniqueId = `BOARD-${String(count + 1).padStart(4, '0')}`;
-      await prisma.board.create({
-        data: {
-          uniqueId,
-          macAddress: boardId,
-          firmwareVersion,
-          displayAvailable,
-          status: 'IDLE',
-        },
+      const existingBoard = await prisma.board.findFirst({
+        where: { macAddress: boardId },
       });
+
+      if (existingBoard) {
+        uniqueId = existingBoard.uniqueId;
+        await prisma.board.update({
+          where: { id: existingBoard.id },
+          data: { status: 'IDLE', connectedAt: new Date() },
+        });
+      } else {
+        const count = await prisma.board.count();
+        uniqueId = `BOARD-${String(count + 1).padStart(4, '0')}`;
+        await prisma.board.create({
+          data: {
+            uniqueId,
+            macAddress: boardId,
+            firmwareVersion,
+            displayAvailable,
+            status: 'IDLE',
+          },
+        });
+      }
     }
 
     setBoardId(uniqueId);

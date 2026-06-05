@@ -18,8 +18,9 @@ bool bleConnected = false;
 String receivedSsid = "";
 String receivedPass = "";
 String receivedUrl = "";
+String receivedUniqueId = "";
 
-extern void onWiFiConfigured(const String& ssid, const String& pass, const String& url);
+extern void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& uniqueId);
 
 class ServerCallbacks: public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer) {
@@ -44,12 +45,14 @@ class RxCallbacks: public NimBLECharacteristicCallbacks {
         if (doc.containsKey("ssid")) receivedSsid = doc["ssid"].as<String>();
         if (doc.containsKey("password")) receivedPass = doc["password"].as<String>();
         if (doc.containsKey("serverUrl")) receivedUrl = doc["serverUrl"].as<String>();
+        if (doc.containsKey("uniqueId")) receivedUniqueId = doc["uniqueId"].as<String>();
 
         if (receivedSsid.length() > 0 && receivedPass.length() > 0 && receivedUrl.length() > 0) {
-          onWiFiConfigured(receivedSsid, receivedPass, receivedUrl);
+          onWiFiConfigured(receivedSsid, receivedPass, receivedUrl, receivedUniqueId);
           receivedSsid = "";
           receivedPass = "";
           receivedUrl = "";
+          receivedUniqueId = "";
         }
       }
     }
