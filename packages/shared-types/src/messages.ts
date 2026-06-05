@@ -1,5 +1,3 @@
-export const MESSAGE_VERSION = '1.0';
-
 export type MessageType =
   | 'REGISTER'
   | 'ASSIGN_ID'
@@ -11,11 +9,11 @@ export type MessageType =
   | 'AVAILABLE_BOARDS'
   | 'ERROR';
 
-export type BoardStatus = 'IDLE' | 'BUSY' | 'OFFLINE' | 'CLAIMED';
+export type BoardStatus = 'IDLE' | 'BUSY' | 'OFFLINE' | 'CLAIMED' | 'DISCARDED';
 export type ClientStatus = 'CONNECTED' | 'DISCONNECTED';
 export type SessionStatus = 'ACTIVE' | 'EXPIRED' | 'TERMINATED';
 export type DataDirection = 'B_TO_C' | 'C_TO_B';
-export type ControlAction = 'RESET' | 'DISCONNECT' | 'PING';
+export type ControlAction = 'RESET' | 'DISCONNECT' | 'PING' | 'FACTORY_RESET';
 
 export interface BaseMessage {
   type: MessageType;

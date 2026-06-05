@@ -5,22 +5,18 @@
 ```mermaid
 graph TB
     P[Product P<br/>UART Device] -->|UART Binary| B[ESP32-C3 Board]
-    B -->|Wi-Fi| S[Server S]
+    B -->|Wi-Fi/WS| S[Server S]
     S -->|WebSocket| C[Client App]
-    S -->|WebSocket| F[Web Dashboard]
 
-    subgraph Mobile
-    A[Phone App<br/>BLE Onboarding]
-    end
-    A -->|BLE| B
+    A[Mobile App A] -->|BLE| B
+    A -->|REST| S
+    F[Web Dashboard FS] -->|REST| S
 
-    subgraph Server
-    BS[WebSocket Server<br/>BS]
-    FS[Web Dashboard<br/>FS]
+    subgraph Server Stack
+    S
     DB[(MySQL)]
     end
-    BS --> DB
-    FS --> BS
+    S --> DB
 ```
 
 ## Data Flow

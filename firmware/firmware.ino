@@ -19,40 +19,46 @@ String uniqueId = "";
 String currentSsid = "";
 bool wsConnected = false;
 bool wifiConnected = false;
+bool productConnected = false;
+bool onboarded = false;
 
 unsigned long lastHeartbeat = 0;
+unsigned long lastDisplayUpdate = 0;
+
+void updateStatusFlags();
+void rebuildDisplay();
 
 void setup() {
   Serial.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
   initDisplay(tft);
-  displayStatus("Initializing...");
 
   initBLE();
 
   if (loadConfig()) {
     uniqueId = getUniqueId();
-    displayStatus("Connecting WiFi...");
+    setBleUniqueId(uniqueId);
+    onboarded = true;
     connectWiFi();
   } else {
-    displayStatus("BLE Waiting...\nConfigure via App");
+    bleStatusFlags = 0;
     startBLEAdvertising();
   }
 }
 
 void loop() {
   handleBLE();
+  handleUART();
 
-  if (WiFi.status() == WL_CONNECTED && !wifiConnected) {
+  bool wifiState = WiFi.status() == WL_CONNECTED;
+
+  if (wifiState && !wifiConnected) {
     wifiConnected = true;
     currentSsid = WiFi.SSID();
-    displayWiFiStatus(currentSsid, true);
     connectWebSocket();
-  }
-
-  if (WiFi.status() != WL_CONNECTED && wifiConnected) {
+  } else if (!wifiState && wifiConnected) {
     wifiConnected = false;
-    displayWiFiStatus(currentSsid, false);
+    productConnected = false;
     reconnectWiFi();
   }
 
@@ -65,7 +71,37 @@ void loop() {
     }
   }
 
-  handleUART();
+  productConnected = isProductConnected();
+  if (productConnected) {
+    sendProductProbe();
+  }
+
+  updateStatusFlags();
+
+  if (onboarded && wifiConnected && wsConnected && !isBleAdvertising()) {
+  } else if (onboarded && (!wifiConnected || !wsConnected)) {
+    if (!isBleAdvertising()) {
+      resumeBLE();
+    }
+  }
+
+  if (millis() - lastDisplayUpdate > 2000) {
+    rebuildDisplay();
+    lastDisplayUpdate = millis();
+  }
+}
+
+void updateStatusFlags() {
+  uint8_t flags = 0;
+  if (productConnected) flags |= STATUS_FLAG_PRD;
+  if (wsConnected)       flags |= STATUS_FLAG_SVR;
+  if (wifiConnected)     flags |= STATUS_FLAG_WIFI;
+  if (onboarded)          flags |= STATUS_FLAG_CFG;
+  setBleStatus(flags);
+}
+
+void rebuildDisplay() {
+  displayNexioStatus(wifiConnected, wsConnected, productConnected, currentSsid, uniqueId);
 }
 
 void connectWiFi() {
@@ -107,13 +143,13 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
       wsConnected = false;
-      displayWsStatus(false);
+      updateStatusFlags();
       break;
 
     case WStype_CONNECTED:
       wsConnected = true;
-      displayWsStatus(true);
       sendRegister();
+      updateStatusFlags();
       break;
 
     case WStype_TEXT:
@@ -122,7 +158,7 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 
     case WStype_ERROR:
       wsConnected = false;
-      displayWsStatus(false);
+      updateStatusFlags();
       break;
 
     default:
@@ -140,7 +176,8 @@ void handleServerMessage(char* payload) {
 
   if (type == "ASSIGN_ID") {
     uniqueId = doc["uniqueId"].as<String>();
-    displayId(uniqueId);
+    setBleUniqueId(uniqueId);
+    updateStatusFlags();
   }
 
   if (type == "DATA_RELAY") {
@@ -155,6 +192,10 @@ void handleServerMessage(char* payload) {
   if (type == "CONTROL") {
     String action = doc["action"].as<String>();
     if (action == "RESET") {
+      ESP.restart();
+    }
+    if (action == "FACTORY_RESET") {
+      clearConfig();
       ESP.restart();
     }
   }
@@ -211,8 +252,9 @@ void sendDataToServer(const uint8_t* data, size_t len) {
 void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {
   if (boardUniqueId.length() > 0) {
     uniqueId = boardUniqueId;
+    setBleUniqueId(uniqueId);
   }
-  saveConfig(ssid, pass, url, boardUniqueId);
-  displayStatus("WiFi Configured\nConnecting...");
+  onboarded = true;
+  saveConfig(ssid, pass, url, uniqueId);
   connectWiFi();
 }

@@ -7,18 +7,20 @@
 ## 1. System Overview
 
 ```
-┌─────────┐  UART   ┌───────────┐  Wi-Fi/WS  ┌────────┐  WebSocket  ┌──────────┐
-│ Product │◄──────►│ ESP32-C3 │◄─────────►│ Server │◄──────────►│ Client   │
-│ (P)     │ Binary  │ (B)       │  JSON+B64  │ (S)    │  JSON+B64  │ (C)      │
-└─────────┘         └───────────┘            └────────┘            └──────────┘
-                                               │    ▲
-                                    BLE        │    │ REST
-                                  ┌────────────┘    └────────────┐
-                                  ▼                              ▼
-                           ┌──────────┐                  ┌──────────────┐
-                           │ Phone    │                  │ Web Dashboard│
-                           │ (A)      │                  │ (FS)         │
-                           └──────────┘                  └──────────────┘
+  ─── DATA PATH ───────────────────────────────────────────────
+  Product    UART Binary   ESP32-C3    Wi-Fi/WS     Server    WS     Client
+  (P)       ◄──────────►   (B)       ◄──────────►   (S)    ◄───►   (C)
+
+  ─── MANAGEMENT ──────────────────────────────────────────────
+  Mobile App (A) ──BLE──► ESP32(B)   : WiFi 설정 + uniqueId 전송
+  Mobile App (A) ──REST─► Server(S)  : uniqueId claim + 온보딩 polling
+  Web Dashboard  ──REST─► Server(S)  : boards/clients/sessions 관리
+  (FS)
+
+  ─── LEGEND ──────────────────────────────────────────────────
+  Binary : raw bytes           B64 : Base64 encoded
+  WS     : WebSocket JSON      BLE : Bluetooth Low Energy
+  REST   : HTTP API (JSON)     UART : Serial (TX=7, RX=6, 115200)
 ```
 
 ### Data Direction
@@ -28,6 +30,9 @@
 | P ↔ B | 양방향 | UART Binary | Raw bytes |
 | B ↔ S | 양방향 | WebSocket JSON | Base64 |
 | S ↔ C | 양방향 | WebSocket JSON | Base64 |
+| A → B | 단방향 | BLE (GATT Write) | JSON |
+| A ↔ S | 양방향 | REST API | JSON |
+| FS → S | 단방향 | REST API | JSON |
 
 ---
 
@@ -118,7 +123,7 @@ Board ──REGISTER─────► Server ──REQUEST_BOARD──► Clien
 | Message | Source | Target | Purpose |
 |---------|--------|--------|---------|
 | `REGISTER` | Board | Server | 최초 접속 등록 (MAC 주소 기반) |
-| `ASSIGN_ID` | Server | Board | 고유 ID 발급 (BOARD-XXXX) |
+| `ASSIGN_ID` | Server | Board | 고유 ID 발급 (숫자 4자리) |
 | `HEARTBEAT` | Both | Both | 연결 유지 (30s) |
 | `DATA_RELAY` | Both | Both | 페이로드 중계 (Base64) |
 | `REQUEST_BOARD` | Client | Server | IDLE 보드 요청 |
@@ -165,6 +170,62 @@ Board ──REGISTER─────► Server ──REQUEST_BOARD──► Clien
                                           └──────────┘
 ```
 
+### 4.4 BLE Advertisement Structure
+
+**Advertisement Data (31B):**
+```
+[3B]  Flags                  02 01 06
+[18B] Service UUID (128bit)   11 06 [16B UUID]
+[10B] Manufacturer Data       08 FF [CompanyID 2B] [FLAGS] [Version] [Reserved]
+```
+- Company ID: `0x02D5` (Espressif)
+- Flags byte (bitmask): `PRD=0x01 | SVR=0x02 | WiFi=0x04 | CFG=0x08`
+- Version byte: `0x01`
+- Service UUID만으로 필터링, Manufacturer Data로 상태 식별
+
+**Scan Response (31B, phone scan request 시):**
+```
+[13B] Full Name "Nexio-0042"   0C 09 4E 65 78 69 6F 2D 30 30 34 32
+```
+- 미설정 시: `"Nexio"` (7B)
+- 설정 후: `"Nexio-{uniqueId}"` (13B)
+
+**Status Flags (1 byte):**
+
+| Bit | Mask | Name | 의미 |
+|-----|------|------|------|
+| 0 | `0x01` | PRD | UART 제품 연결됨 |
+| 1 | `0x02` | SVR | WebSocket 서버 연결됨 |
+| 2 | `0x04` | WiFi | Wi-Fi 연결됨 |
+| 3 | `0x08` | CFG | 온보딩 완료 (설정 있음) |
+
+**예시 상태값:**
+
+| Flags | 상태 | 의미 |
+|-------|------|------|
+| `0x00` | ⚪ Unconfigured | 설정 전, BLE 대기 |
+| `0x08` | 🟡 Configuring | 설정만 있음, Wi-Fi 연결 중 |
+| `0x0C` | 🟡 Connecting | Wi-Fi 연결됨, 서버 연결 대기 |
+| `0x0E` | 🟡 Connected | Wi-Fi+서버 연결, 제품 미연결 |
+| `0x0F` | 🟢 Full Connected | 모두 정상 |
+| `0x04` | 🔴 WiFi Only | Wi-Fi만 연결됨 (비정상) |
+
+### 4.5 BLE ON/OFF Strategy
+
+```
+전원 ON
+├── 설정 없음 → BLE ON (flags=0x00, SCAN_RSP="Nexio")
+├── 설정 있음 → WiFi 연결 시도
+│   ├── 서버 연결 성공 + 제품 연결 → BLE OFF
+│   └── WiFi/서버/제품 연결 끊김 → BLE fallback ON (flags=현재상태)
+```
+
+### 4.6 UART Keep-Alive
+
+- 제품(P)의 UART RX 30초 타임아웃 기반 연결 모니터링
+- 10초마다 프로브 바이트(0x00) 전송
+- `PRD` 플래그는 RX 수신 여부로 결정
+
 ---
 
 ## 5. Database Schema (Prisma)
@@ -176,9 +237,9 @@ erDiagram
 
     Board {
         String id PK               "UUID"
-        String uniqueId UK         "BOARD-0001"
-        String macAddress          "AA:BB:CC:DD:EE:FF"
-        String status             "IDLE | BUSY | OFFLINE"
+        String uniqueId UK         "0042"
+        String macAddress UK       "AA:BB:CC:DD:EE:FF"
+        String status             "IDLE | BUSY | OFFLINE | CLAIMED"
         String firmwareVersion?
         Boolean displayAvailable
         DateTime connectedAt
@@ -213,21 +274,47 @@ erDiagram
 firmware.ino
 ├── setup()
 │   ├── initDisplay()         ← TFT 초기화
-│   ├── initBLE()             ← GATT 서버 시작
+│   ├── initBLE()             ← GATT 서버 + ADV/SCAN_RSP 준비
 │   └── loadConfig()
-│       ├── true  → connectWiFi()
+│       ├── true  → setBleUniqueId() → connectWiFi()
 │       └── false → startBLEAdvertising()
 │
-└── loop()
+└── loop() (매 iteration)
     ├── handleBLE()           ← BLE write 이벤트 처리
-    ├── WiFi 상태 체크
-    │   ├── 연결됨 → webSocketClient.loop()
-    │   └── 끊김   → reconnectWiFi()
-    ├── heartbeat (30s)
-    └── handleUART()          ← UART → WS 중계
+    ├── handleUART()          ← UART → WS 중계 + RX 타임스탬프
+    ├── WiFi 상태 체크 / reconnectWebSocket()
+    ├── webSocketClient.loop() + sendHeartbeat() (30s)
+    ├── isProductConnected() + sendProductProbe() (10s)
+    ├── updateStatusFlags()   ← 4개 비트를 종합해 BLE ADV 갱신
+    └── BLE fallback ON/OFF   ← 온보딩+연결되면 OFF, 끊기면 ON
+    └── rebuildDisplay()      ← 2초마다 LCD 갱신
+
+updateStatusFlags()
+  └── PRD=isProductConnected()
+      SVR=wsConnected
+      WiFi=wifiConnected
+      CFG=onboarded
+      → setBleStatus(flags) → updateAdvertising()
 ```
 
-**모듈:** `ble.cpp` (GATT Server), `wifi.cpp` (NVS 저장/연결), `websocket.cpp` (WS Client), `uart.cpp` (Serial read/write), `display.cpp` (TFT), `base64.cpp`
+**BLE ON/OFF 전환:** 설정 완료 + WiFi + WS + 제품 모두 연결 시 BLE OFF. 하나라도 끊기면 BLE ON.
+
+**DISPLAY 통합 화면 (240x240):**
+```
+┌──────────────────────┐
+│ Nexio                │  ← 흰색, size 2
+│ ID: 0042             │  ← 청록, size 1
+│                      │
+│ WiFi ● MyHomeNet     │  ← 초록/빨강 원 + SSID
+│ SVR  ●               │  ← 초록/빨강 원
+│ PRD  ●               │  ← 초록/빨강 원
+│                      │
+│ BLE waiting...       │  ← 미설정 시 노랑
+│ Use Nexio App        │
+└──────────────────────┘
+```
+
+**모듈:** `ble.cpp` (GATT Server + ADV/SCAN_RSP), `wifi.cpp` (NVS 저장/연결), `websocket.cpp` (WS Client), `uart.cpp` (Serial read/write + keep-alive), `display.cpp` (TFT 통합 상태), `base64.cpp`
 
 ### 6.2 Server
 
@@ -240,6 +327,7 @@ src/index.ts
 │   ├── GET  /api/boards/idle
 │   ├── GET  /api/boards/onboarding?mac=...  ← 모바일 온보딩 확인
 │   ├── GET  /api/clients
+│   ├── POST /api/onboarding/claim            ← 고유번호 발급 (숫자 4자리)
 │   ├── POST /api/sessions        ← 수동 세션 생성
 │   ├── DELETE /api/sessions/:id  ← 세션 종료
 │   └── POST /api/control          ← RESET/DISCONNECT
@@ -316,10 +404,10 @@ src/App.tsx
 lib/
 ├── main.dart                   ← App entry
 ├── screens/
-│   ├── home_screen.dart        ← BLE scan + device list
+│   ├── home_screen.dart        ← BLE scan + device list (상태 표시)
 │   └── config_screen.dart      ← WiFi 입력 + BLE 전송 + 서버 온보딩 확인
 ├── ble/
-│   └── ble_scanner.dart        ← flutter_blue_plus wrapper
+│   └── ble_scanner.dart        ← flutter_blue_plus wrapper + AD flags 파싱
 └── services/
     ├── storage_service.dart    ← Server URL 저장 (SharedPreferences)
     └── server_service.dart     ← 서버 REST API 호출 (온보딩 폴링)
@@ -330,12 +418,23 @@ lib/
 - RX (Write): `6e400003-...` ← JSON 전송
 - TX (Notify): `6e400002-...` → ACK 수신
 
+**Device 상태 표시 (home_screen):**
+
+| 상태 | 색상 | 의미 | 탭 가능? |
+|------|------|------|---------|
+| `unconfigured` | ⚪ 회색 | 설정 전 | ✅ ConfigScreen 이동 |
+| `configuring` | 🟡 주황 | 설정 전송됨, WiFi 연결 중 | ❌ |
+| `connecting` | 🟡 주황 | WiFi 연결, 서버 대기 | ❌ |
+| `connected` | 🟡 노랑 | WiFi+서버 연결 | ❌ |
+| `fullConnected` | 🟢 초록 | 모두 정상 | ❌ |
+| `wifiOnly` | 🔴 빨강 | WiFi만 연결 (비정상) | ❌ |
+
 **온보딩 플로우:**
-1. BLE Write → ESP32에 WiFi 설정 전송
-2. ESP32 → WiFi 연결 → Server REGISTER
-3. App → Server REST 폴링 (`GET /api/boards/onboarding?mac=...`)
-4. Server가 보드 등록 확인 → App에 "Onboarding Complete" 표시
-5. 타임아웃(30s) 시 실패 처리
+1. 서버 `POST /api/onboarding/claim` → 고유번호(숫자 4자리) 발급
+2. BLE Write (JSON) → ESP32에 WiFi + 고유번호 전송
+3. ESP32 → WiFi 연결 → Server REGISTER
+4. App → Server REST 폴링 (`GET /api/boards/onboarding?mac=...`, 30s timeout)
+5. Server가 보드 등록 확인 → App에 "Onboarding Complete" 표시
 
 ### 6.6 PC Config App
 
@@ -380,10 +479,12 @@ src/renderer/App.tsx
        └── WebSocket Server (ws/board, ws/client)
 
 2. ESP32 전원 ON
-   ├── BLE 대기 (초기 설정 없을 시)
-   │   └── Mobile/PC Config → WiFi 정보 전송
+   ├── 설정 없음 → BLE ON (flags=0x00, SCAN_RSP="Nexio")
+   │   └── Mobile/PC Config → WiFi 정보 전송 → 고유번호 발급
+   ├── 설정 있음 → BLE SCAN_RSP="Nexio-0042"
    ├── Wi-Fi 연결
    ├── WebSocket → REGISTER → ASSIGN_ID 수신
+   ├── 서버+제품 연결 시 BLE OFF
    └── IDLE 상태 대기
 
 3. Client 실행
@@ -395,3 +496,22 @@ src/renderer/App.tsx
 4. Dashboard 접속
    └── http://localhost:10008 → 모니터링/제어
 ```
+
+---
+
+## 9. Key Protocol Details
+
+### uniqueId Format
+- 이전: `BOARD-0042` (프리픽스 + 4자리 숫자)
+- 현재: `0042` (순수 4자리 숫자, `String(count+1).padStart(4,'0')`)
+
+### BLE Name Resolution
+- Phone이 Scan Request를 보내면 ESP32가 SCAN_RSP로 응답
+- 미설정: `"Nexio"`
+- 설정 후: `"Nexio-{uniqueId}"` (예: `Nexio-0042`)
+
+### UART Keep-Alive Parameters
+- `PRODUCT_TIMEOUT_MS`: 30000 (30초간 RX 없으면 연결 끊김)
+- `PRODUCT_PROBE_INTERVAL_MS`: 10000 (10초마다 프로브 0x00 전송)
+- 제품 측 펌웨어 변경 불필요 (RX 기반 모니터링)
+

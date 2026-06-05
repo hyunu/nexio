@@ -12,59 +12,44 @@ void initDisplay(TFT_eSPI& display) {
   tft.setTextSize(2);
 }
 
-void displayStatus(const String& status) {
+static void drawIndicator(int x, int y, bool on) {
+  tft.fillCircle(x, y, 4, on ? TFT_GREEN : TFT_RED);
+}
+
+void displayNexioStatus(bool wifiOn, bool svrOn, bool prdOn, const String& ssid, const String& uniqueId) {
   tft.fillScreen(TFT_BLACK);
+
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextSize(2);
-  tft.drawString("Nexio", 10, 10);
-  tft.setTextSize(1);
-  tft.drawString(status, 10, 40);
-}
+  tft.drawString("Nexio", 10, 8);
 
-void displayWiFiStatus(const String& ssid, bool connected) {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.drawString("Nexio", 10, 10);
-
-  tft.setTextSize(1);
-  if (connected) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("WiFi: Connected", 10, 50);
-  } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.drawString("WiFi: Disconnected", 10, 50);
+  if (uniqueId.length() > 0) {
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.drawString("ID: " + uniqueId, 10, 32);
   }
 
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("SSID: " + ssid, 10, 70);
-}
-
-void displayWsStatus(bool connected) {
+  int yBase = 60;
   tft.setTextSize(1);
-  if (connected) {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.drawString("WS: Connected", 10, 90);
-  } else {
-    tft.setTextColor(TFT_RED, TFT_BLACK);
-    tft.drawString("WS: Disconnected", 10, 90);
+
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("WiFi", 10, yBase);
+  drawIndicator(60, yBase + 4, wifiOn);
+  if (ssid.length() > 0) {
+    tft.drawString(ssid.substring(0, 16), 80, yBase);
   }
-}
 
-void displayId(const String& id) {
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.drawString("ID: " + id, 10, 110);
-}
+  tft.drawString("SVR", 10, yBase + 20);
+  drawIndicator(60, yBase + 24, svrOn);
 
-void displayUniqueId(const String& id) {
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setTextSize(3);
-  tft.drawString(id, 20, 60);
-  tft.setTextSize(1);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Nexio", 10, 10);
+  tft.drawString("PRD", 10, yBase + 40);
+  drawIndicator(60, yBase + 44, prdOn);
+
+  if (!wifiOn && !svrOn && !prdOn && uniqueId.length() == 0) {
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.drawString("BLE waiting...", 10, yBase + 70);
+    tft.drawString("Use Nexio App", 10, yBase + 84);
+  }
 }
 
 void displayClear() {

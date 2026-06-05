@@ -56,16 +56,37 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  static const _stateColors = {
+    NexioDeviceState.unconfigured: Colors.grey,
+    NexioDeviceState.configuring: Colors.orange,
+    NexioDeviceState.connecting: Colors.orange,
+    NexioDeviceState.connected: Colors.yellow,
+    NexioDeviceState.fullConnected: Colors.green,
+    NexioDeviceState.wifiOnly: Colors.red,
+  };
+
+  static const _stateLabels = {
+    NexioDeviceState.unconfigured: 'Unconfigured',
+    NexioDeviceState.configuring: 'Configuring',
+    NexioDeviceState.connecting: 'Connecting',
+    NexioDeviceState.connected: 'Connected',
+    NexioDeviceState.fullConnected: 'Active',
+    NexioDeviceState.wifiOnly: 'WiFi only',
+  };
+
   void _onDeviceSelected(ScanResult device) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ConfigScreen(
-          device: device.device,
-          serverUrl: _savedServerUrl ?? 'ws://192.168.1.100:10008/ws/board',
+    final state = BleScanner.parseStateFromAdData(device.advertisementData);
+    if (state == NexioDeviceState.unconfigured) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ConfigScreen(
+            device: device.device,
+            serverUrl: _savedServerUrl ?? 'ws://192.168.1.100:10008/ws/board',
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 
   @override
@@ -123,12 +144,28 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemCount: _devices.length,
                     itemBuilder: (context, index) {
                       final device = _devices[index];
+                      final state = BleScanner.parseStateFromAdData(
+                        device.advertisementData,
+                      );
+                      final color = _stateColors[state] ?? Colors.grey;
+                      final label = _stateLabels[state] ?? '';
+                      final canTap = state == NexioDeviceState.unconfigured;
                       return ListTile(
-                        leading: const Icon(Icons.bluetooth),
+                        leading: CircleAvatar(
+                          backgroundColor: color,
+                          radius: 14,
+                          child: Icon(
+                            Icons.bluetooth,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                        ),
                         title: Text(device.device.name),
-                        subtitle: Text(device.device.id.id),
-                        trailing: const Icon(Icons.arrow_forward_ios),
-                        onTap: () => _onDeviceSelected(device),
+                        subtitle: Text('${device.device.id.id} · $label'),
+                        trailing: canTap
+                            ? const Icon(Icons.settings)
+                            : const Icon(Icons.arrow_forward_ios),
+                        onTap: canTap ? () => _onDeviceSelected(device) : null,
                       );
                     },
                   ),

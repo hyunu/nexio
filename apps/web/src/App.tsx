@@ -152,24 +152,33 @@ function App() {
             <tbody>
               {boards.map(board => (
                 <tr key={board.id}>
-                  <td style={tdStyle}>{board.uniqueId}</td>
-                  <td style={tdStyle}>
-                    <span style={{
-                      ...badgeStyle,
-                      background: getStatusColor(board.status),
-                    }}>
-                      {board.status}
-                    </span>
-                  </td>
-                  <td style={tdStyle}>{new Date(board.connectedAt).toLocaleString()}</td>
-                  <td style={tdStyle}>
-                    <button
-                      style={buttonStyle}
-                      onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}
-                    >
-                      Reset
-                    </button>
-                  </td>
+                      <td style={tdStyle}>{board.uniqueId}</td>
+                      <td style={tdStyle}>
+                        <span style={{
+                          ...badgeStyle,
+                          background: getStatusColor(board.status),
+                        }}>
+                          {board.status}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>{new Date(board.connectedAt).toLocaleString()}</td>
+                      <td style={tdStyle}>
+                        <button
+                          style={buttonStyle}
+                          onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}
+                        >
+                          Reset
+                        </button>
+                        <button
+                          style={{ ...buttonStyle, background: '#6b7280', marginLeft: 4 }}
+                          onClick={async () => {
+                            await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' });
+                            fetchData();
+                          }}
+                        >
+                          Discard
+                        </button>
+                      </td>
                 </tr>
               ))}
               {boards.length === 0 && (

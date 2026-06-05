@@ -1,12 +1,8 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PrismaClient } from '@prisma/client';
 import { WEBSOCKET_PATHS, MESSAGE_VERSION, HEARTBEAT_TIMEOUT_MS } from '@nexio/shared-types';
-
-const fastify = Fastify({ logger: true });
-const prisma = new PrismaClient();
 
 const PORT = parseInt(process.env.PORT || '10008');
 
@@ -14,7 +10,11 @@ const boardConnections = new Map<string, WebSocket>();
 const clientConnections = new Map<string, WebSocket>();
 const heartbeatTimers = new Map<string, NodeJS.Timeout>();
 
+const prisma = new PrismaClient();
+
 async function start() {
+  const fastify = Fastify({ logger: true });
+
   await fastify.register(cors, { origin: true });
 
   fastify.get('/api/health', async () => ({ status: 'ok', timestamp: Date.now() }));
@@ -69,7 +69,7 @@ async function start() {
     }
 
     const count = await prisma.board.count();
-    const uniqueId = `BOARD-${String(count + 1).padStart(4, '0')}`;
+    const uniqueId = `${String(count + 1).padStart(4, '0')}`;
 
     await prisma.board.create({
       data: {
@@ -177,6 +177,39 @@ async function start() {
     return { success: true };
   });
 
+  fastify.post('/api/boards/:id/discard', async (request: any) => {
+    const { id } = request.params;
+
+    const board = await prisma.board.findUnique({ where: { uniqueId: id } });
+    if (!board) {
+      return { error: 'Board not found' }, 404;
+    }
+
+    if (board.status === 'DISCARDED') {
+      return { message: 'Already discarded' };
+    }
+
+    await prisma.board.update({
+      where: { id: board.id },
+      data: { status: 'DISCARDED' },
+    });
+
+    const boardWs = boardConnections.get(id);
+    if (boardWs && boardWs.readyState === WebSocket.OPEN) {
+      boardWs.send(JSON.stringify({
+        type: 'CONTROL',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        targetId: id,
+        action: 'FACTORY_RESET',
+        reason: 'board_discarded',
+      }));
+      boardConnections.delete(id);
+    }
+
+    return { success: true, discarded: true };
+  });
+
   fastify.post('/api/control', async (request: any) => {
     const { targetId, action, type } = request.body;
 
@@ -212,9 +245,7 @@ async function start() {
     return { success: true };
   });
 
-  const server = createServer(fastify.server);
-
-  const wss = new WebSocketServer({ server, path: WEBSOCKET_PATHS.BOARD });
+  const wss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.BOARD });
 
   wss.on('connection', (ws, req) => {
     let boardId: string | null = null;
@@ -240,7 +271,7 @@ async function start() {
     });
   });
 
-  const clientWss = new WebSocketServer({ server, path: WEBSOCKET_PATHS.CLIENT });
+  const clientWss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.CLIENT });
 
   clientWss.on('connection', (ws, req) => {
     let clientId: string | null = null;
@@ -266,9 +297,7 @@ async function start() {
     });
   });
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  await fastify.listen({ port: PORT, host: '0.0.0.0' });
 
   setInterval(checkExpiredSessions, 60000);
 }
@@ -284,6 +313,18 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
         where: { uniqueId: preAssignedId },
       });
       if (claimed) {
+        if (claimed.status === 'DISCARDED') {
+          ws.send(JSON.stringify({
+            type: 'CONTROL',
+            version: MESSAGE_VERSION,
+            timestamp: Date.now(),
+            targetId: claimed.uniqueId,
+            action: 'FACTORY_RESET',
+            reason: 'board_discarded',
+          }));
+          ws.close();
+          return;
+        }
         uniqueId = claimed.uniqueId;
         await prisma.board.update({
           where: { id: claimed.id },
@@ -313,6 +354,18 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       });
 
       if (existingBoard) {
+        if (existingBoard.status === 'DISCARDED') {
+          ws.send(JSON.stringify({
+            type: 'CONTROL',
+            version: MESSAGE_VERSION,
+            timestamp: Date.now(),
+            targetId: existingBoard.uniqueId,
+            action: 'FACTORY_RESET',
+            reason: 'board_discarded',
+          }));
+          ws.close();
+          return;
+        }
         uniqueId = existingBoard.uniqueId;
         await prisma.board.update({
           where: { id: existingBoard.id },
@@ -320,7 +373,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
         });
       } else {
         const count = await prisma.board.count();
-        uniqueId = `BOARD-${String(count + 1).padStart(4, '0')}`;
+        uniqueId = `${String(count + 1).padStart(4, '0')}`;
         await prisma.board.create({
           data: {
             uniqueId,

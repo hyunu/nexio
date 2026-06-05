@@ -4,16 +4,16 @@
 #include <ArduinoJson.h>
 #include "config.h"
 
-class BleCallbacks;
-class CharacteristicCallbacks;
-
 NimBLEServer* pServer = nullptr;
 NimBLEService* pService = nullptr;
 NimBLECharacteristic* pTxCharacteristic = nullptr;
 NimBLECharacteristic* pRxCharacteristic = nullptr;
 
-bool bleConfigured = false;
 bool bleConnected = false;
+uint8_t bleStatusFlags = 0;
+
+static String bleUniqueId = "";
+static bool bleAdvertisingActive = false;
 
 String receivedSsid = "";
 String receivedPass = "";
@@ -80,16 +80,65 @@ void initBLE() {
   pService->start();
 }
 
-void startBLEAdvertising() {
-  NimBLEAdvertisementData advertisementData;
-  advertisementData.setName(BLE_DEVICE_NAME);
-  advertisementData.setServices(NimBLEUUID(BLE_SERVICE_UUID));
-  advertisementData.setConnectable(true);
+void setBleUniqueId(const String& id) {
+  bleUniqueId = id;
+}
 
+void updateAdvertising() {
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+
+  if (pAdvertising->isAdvertising()) {
+    pAdvertising->stop();
+  }
+
+  NimBLEAdvertisementData advData;
+  advData.setFlags(BLE_HS_ADV_F_DISC_GEN);
+
+  uint8_t mfgData[5] = {
+    (uint8_t)(BLE_MFG_COMPANY_ID & 0xFF),
+    (uint8_t)(BLE_MFG_COMPANY_ID >> 8),
+    bleStatusFlags,
+    0x01,
+    0x00
+  };
+  advData.setManufacturerData(std::string((char*)mfgData, 5));
+
+  pAdvertising->setAdvertisementData(advData);
+
+  NimBLEAdvertisementData scanRspData;
+  if (bleUniqueId.length() > 0) {
+    String fullName = "Nexio-" + bleUniqueId;
+    scanRspData.setName(fullName.c_str());
+  } else {
+    scanRspData.setName(BLE_DEVICE_NAME);
+  }
+  scanRspData.setServices(NimBLEUUID(BLE_SERVICE_UUID));
+
+  pAdvertising->setScanResponseData(scanRspData);
   pAdvertising->addServiceUUID(NimBLEUUID(BLE_SERVICE_UUID));
-  pAdvertising->setScanResponseData(advertisementData);
+
   pAdvertising->start();
+  bleAdvertisingActive = true;
+}
+
+void startBLEAdvertising() {
+  if (bleAdvertisingActive) return;
+  updateAdvertising();
+}
+
+void stopBLE() {
+  NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+  if (pAdvertising->isAdvertising()) {
+    pAdvertising->stop();
+  }
+  bleAdvertisingActive = false;
+}
+
+void setBleStatus(uint8_t flags) {
+  bleStatusFlags = flags;
+  if (bleAdvertisingActive) {
+    updateAdvertising();
+  }
 }
 
 void handleBLE() {
@@ -99,6 +148,12 @@ bool isBleConnected() {
   return bleConnected;
 }
 
-void stopBLE() {
-  NimBLEDevice::getAdvertising()->stop();
+bool isBleAdvertising() {
+  return bleAdvertisingActive;
+}
+
+void resumeBLE() {
+  if (!bleAdvertisingActive) {
+    startBLEAdvertising();
+  }
 }
