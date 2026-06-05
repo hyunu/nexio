@@ -1,7 +1,7 @@
 {
   "name": "@nexio/client",
   "version": "1.0.0",
-  "main": "dist/main.js",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",

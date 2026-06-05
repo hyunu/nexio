@@ -19,6 +19,18 @@ declare global {
         onDisconnected: (callback: () => void) => void;
         onMessage: (callback: (message: string) => void) => void;
       };
+      auth: {
+        login: (credentials: { username: string; password: string }) => Promise<{
+          success: boolean;
+          error?: string;
+          data?: { userId: string; username: string; email: string; orgName: string; token: string };
+        }>;
+        register: (data: { username: string; password: string; email: string; orgName: string }) => Promise<{
+          success: boolean;
+          error?: string;
+          data?: { userId: string; username: string; email: string; orgName: string; token: string };
+        }>;
+      };
     };
   }
 }
@@ -35,7 +47,38 @@ interface BoardReady {
   expiresAt: number;
 }
 
+interface AuthInfo {
+  userId: string;
+  username: string;
+  email: string;
+  orgName: string;
+  token: string;
+}
+
+const LS_AUTH_KEY = 'nexio_auth';
+
+function loadAuth(): AuthInfo | null {
+  try {
+    const raw = localStorage.getItem(LS_AUTH_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 function App() {
+  const [auth, setAuth] = useState<AuthInfo | null>(loadAuth);
+  const [authPage, setAuthPage] = useState<'login' | 'register'>('login');
+
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [regUsername, setRegUsername] = useState('');
+  const [regPassword, setRegPassword] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regOrgName, setRegOrgName] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
   const [serverUrl, setServerUrl] = useState('ws://localhost:10008/ws/client');
   const [wsConnected, setWsConnected] = useState(false);
   const [wsConnecting, setWsConnecting] = useState(false);
@@ -55,17 +98,21 @@ function App() {
   const logsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!auth) return;
+
     loadSerialPorts();
 
     window.electronAPI.ws.onConnected(() => {
       setWsConnected(true);
       setWsConnecting(false);
-      addLog('connected', 'WebSocket connected');
+      addLog('received', 'WebSocket connected');
+      requestBoard();
     });
 
     window.electronAPI.ws.onDisconnected(() => {
       setWsConnected(false);
       setBoardReady(null);
+      setSessionId(null);
       addLog('error', 'WebSocket disconnected');
     });
 
@@ -83,13 +130,64 @@ function App() {
       window.electronAPI.ws.close();
       window.electronAPI.serial.close();
     };
-  }, []);
+  }, [auth]);
 
   useEffect(() => {
     if (logsRef.current) {
       logsRef.current.scrollTop = logsRef.current.scrollHeight;
     }
   }, [logs]);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!loginUsername || !loginPassword) return;
+    setAuthLoading(true);
+    setAuthError('');
+
+    const result = await window.electronAPI.auth.login({
+      username: loginUsername,
+      password: loginPassword,
+    });
+
+    setAuthLoading(false);
+    if (result.success && result.data) {
+      localStorage.setItem(LS_AUTH_KEY, JSON.stringify(result.data));
+      setAuth(result.data);
+    } else {
+      setAuthError(result.error || 'Login failed');
+    }
+  }
+
+  async function handleRegister(e: React.FormEvent) {
+    e.preventDefault();
+    if (!regUsername || !regPassword) return;
+    setAuthLoading(true);
+    setAuthError('');
+
+    const result = await window.electronAPI.auth.register({
+      username: regUsername,
+      password: regPassword,
+      email: regEmail,
+      orgName: regOrgName,
+    });
+
+    setAuthLoading(false);
+    if (result.success && result.data) {
+      localStorage.setItem(LS_AUTH_KEY, JSON.stringify(result.data));
+      setAuth(result.data);
+    } else {
+      setAuthError(result.error || 'Registration failed');
+    }
+  }
+
+  function handleLogout() {
+    localStorage.removeItem(LS_AUTH_KEY);
+    window.electronAPI.ws.close();
+    setAuth(null);
+    setWsConnected(false);
+    setBoardReady(null);
+    setSessionId(null);
+  }
 
   async function loadSerialPorts() {
     const ports = await window.electronAPI.serial.list();
@@ -111,24 +209,26 @@ function App() {
   async function disconnectWs() {
     await window.electronAPI.ws.close();
     setWsConnected(false);
+    setBoardReady(null);
+    setSessionId(null);
   }
 
   async function connectSerial() {
     if (!selectedPort) return;
-
     setSerialConnecting(true);
     const result = await window.electronAPI.serial.open({
       path: selectedPort,
-      baudRate: baudRate,
+      baudRate,
     });
 
     if (result.success) {
       setSerialConnected(true);
       setSerialConnecting(false);
-      addLog('connected', `Serial port ${selectedPort} opened`);
+      addLog('sent', `Serial port ${selectedPort} opened`);
 
-      if (wsConnected) {
-        requestBoard();
+      if (wsConnected && sessionId) {
+        const msg = { type: 'CLIENT_READY', sessionId, timestamp: Date.now() };
+        await window.electronAPI.ws.send(JSON.stringify(msg));
       }
     } else {
       setSerialConnecting(false);
@@ -142,12 +242,14 @@ function App() {
   }
 
   async function requestBoard() {
+    if (!auth) return;
     const message = {
       type: 'REQUEST_BOARD',
       version: '1.0',
       timestamp: Date.now(),
       clientId: `CLIENT-${Date.now()}`,
       sessionDuration: 3600,
+      token: auth.token,
     };
 
     await window.electronAPI.ws.send(JSON.stringify(message));
@@ -158,7 +260,6 @@ function App() {
     if (!wsConnected || !sessionId) return;
 
     const base64 = btoa(data);
-
     const message = {
       type: 'DATA_RELAY',
       version: '1.0',
@@ -172,9 +273,8 @@ function App() {
     await window.electronAPI.ws.send(JSON.stringify(message));
   }
 
-  async function sendFromSerial(data: string) {
+  async function sendFromInput(data: string) {
     if (!serialConnected) return;
-
     await window.electronAPI.serial.write(data + '\n');
     addLog('sent', `Serial: ${data}`);
   }
@@ -191,6 +291,10 @@ function App() {
         });
         setSessionId(msg.sessionId);
         addLog('received', `Board ready: ${msg.boardId}`);
+      }
+
+      if (msg.type === 'AUTH_INFO') {
+        addLog('received', `Authenticated as ${auth?.username}`);
       }
 
       if (msg.type === 'DATA_RELAY' && msg.direction === 'B_TO_C') {
@@ -229,9 +333,124 @@ function App() {
     return new Date(ts).toLocaleTimeString();
   }
 
+  if (!auth) {
+    return (
+      <div className="auth-container">
+        <div className="auth-card">
+          <div className="auth-header">
+            <div className="logo">N</div>
+            <h1>Welcome to Nexio</h1>
+            <p>Sign in to your account to continue</p>
+          </div>
+
+          <div className="auth-tabs">
+            <button
+              className={`auth-tab ${authPage === 'login' ? 'active' : ''}`}
+              onClick={() => { setAuthPage('login'); setAuthError(''); }}
+            >
+              Sign In
+            </button>
+            <button
+              className={`auth-tab ${authPage === 'register' ? 'active' : ''}`}
+              onClick={() => { setAuthPage('register'); setAuthError(''); }}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {authError && <div className="auth-error">{authError}</div>}
+
+          {authPage === 'login' ? (
+            <form onSubmit={handleLogin} className="auth-form">
+              <div className="auth-field">
+                <label>Username</label>
+                <input
+                  type="text"
+                  placeholder="Enter your username"
+                  value={loginUsername}
+                  onChange={e => setLoginUsername(e.target.value)}
+                  disabled={authLoading}
+                  autoFocus
+                />
+              </div>
+              <div className="auth-field">
+                <label>Password</label>
+                <input
+                  type="password"
+                  placeholder="Enter your password"
+                  value={loginPassword}
+                  onChange={e => setLoginPassword(e.target.value)}
+                  disabled={authLoading}
+                />
+              </div>
+              <button type="submit" className="auth-btn" disabled={authLoading || !loginUsername || !loginPassword}>
+                {authLoading ? 'Signing in...' : 'Sign In'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="auth-form">
+              <div className="auth-field">
+                <label>Username</label>
+                <input
+                  type="text"
+                  placeholder="Choose a username"
+                  value={regUsername}
+                  onChange={e => setRegUsername(e.target.value)}
+                  disabled={authLoading}
+                  autoFocus
+                />
+              </div>
+              <div className="auth-field">
+                <label>Password</label>
+                <input
+                  type="password"
+                  placeholder="Choose a password"
+                  value={regPassword}
+                  onChange={e => setRegPassword(e.target.value)}
+                  disabled={authLoading}
+                />
+              </div>
+              <div className="auth-field">
+                <label>Email</label>
+                <input
+                  type="email"
+                  placeholder="email@example.com"
+                  value={regEmail}
+                  onChange={e => setRegEmail(e.target.value)}
+                  disabled={authLoading}
+                />
+              </div>
+              <div className="auth-field">
+                <label>Organization</label>
+                <input
+                  type="text"
+                  placeholder="Your organization (optional)"
+                  value={regOrgName}
+                  onChange={e => setRegOrgName(e.target.value)}
+                  disabled={authLoading}
+                />
+              </div>
+              <button type="submit" className="auth-btn" disabled={authLoading || !regUsername || !regPassword}>
+                {authLoading ? 'Registering...' : 'Create Account'}
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
-      <h1>Nexio Client</h1>
+      <div className="top-bar">
+        <div className="top-bar-left">
+          <h1>Nexio Client</h1>
+          <span className="user-badge">
+            {auth.username}{auth.orgName ? ` @ ${auth.orgName}` : ''}
+          </span>
+        </div>
+        <button className="logout-btn" onClick={handleLogout}>Sign Out</button>
+      </div>
 
       <div className="section">
         <h2>Server Connection</h2>
@@ -331,6 +550,24 @@ function App() {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="section">
+        <h2>Send Data</h2>
+        <div className="input-group">
+          <input
+            type="text"
+            placeholder="Type data to send to serial..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                sendFromInput((e.target as HTMLInputElement).value);
+                (e.target as HTMLInputElement).value = '';
+              }
+            }}
+            disabled={!serialConnected}
+          />
+        </div>
+        <span className="hint">Press Enter to send</span>
       </div>
     </div>
   );

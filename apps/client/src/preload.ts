@@ -26,4 +26,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('ws:message', (_, message) => callback(message));
     },
   },
+  auth: {
+    login: (credentials: { username: string; password: string }) =>
+      ipcRenderer.invoke('auth:login', credentials),
+    register: (data: { username: string; password: string; email: string; orgName: string }) =>
+      ipcRenderer.invoke('auth:register', data),
+  },
 });

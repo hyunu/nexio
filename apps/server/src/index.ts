@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PrismaClient } from '@prisma/client';
 import { WEBSOCKET_PATHS, MESSAGE_VERSION, HEARTBEAT_TIMEOUT_MS } from '@nexio/shared-types';
@@ -245,6 +246,83 @@ async function start() {
     return { success: true };
   });
 
+  fastify.get('/api/users', async () => {
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, username: true, email: true, orgName: true, active: true, clientId: true, createdAt: true },
+    });
+    return users;
+  });
+
+  fastify.post('/api/users/:id/toggle', async (request: any) => {
+    const { id } = request.params;
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return { error: 'User not found' }, 404;
+    const updated = await prisma.user.update({
+      where: { id },
+      data: { active: !user.active },
+    });
+    return { id: updated.id, active: updated.active };
+  });
+
+  fastify.post('/api/auth/register', async (request: any) => {
+    const { username, password, email, orgName } = request.body;
+    if (!username || !password) {
+      return { error: 'Username and password required' }, 400;
+    }
+    if (username.length < 3) {
+      return { error: 'Username must be at least 3 characters' }, 400;
+    }
+    if (password.length < 4) {
+      return { error: 'Password must be at least 4 characters' }, 400;
+    }
+
+    const existing = await prisma.user.findUnique({ where: { username } });
+    if (existing) {
+      return { error: 'Username already taken' }, 409;
+    }
+
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    const hashed = `${salt}:${hash}`;
+    const token = crypto.randomUUID();
+
+    const user = await prisma.user.create({
+      data: { username, password: hashed, email: email || null, orgName: orgName || null, token },
+    });
+
+    return { userId: user.id, username: user.username, email: user.email, orgName: user.orgName, token: user.token };
+  });
+
+  fastify.post('/api/auth/login', async (request: any) => {
+    const { username, password } = request.body;
+    if (!username || !password) {
+      return { error: 'Username and password required' }, 400;
+    }
+
+    const user = await prisma.user.findUnique({ where: { username } });
+    if (!user) {
+      return { error: 'Invalid username or password' }, 401;
+    }
+    if (!user.active) {
+      return { error: 'Account is deactivated' }, 403;
+    }
+
+    const [salt, storedHash] = user.password.split(':');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    if (hash !== storedHash) {
+      return { error: 'Invalid username or password' }, 401;
+    }
+
+    if (!user.token) {
+      const token = crypto.randomUUID();
+      await prisma.user.update({ where: { id: user.id }, data: { token } });
+      return { userId: user.id, username: user.username, email: user.email, orgName: user.orgName, token };
+    }
+
+    return { userId: user.id, username: user.username, email: user.email, orgName: user.orgName, token: user.token };
+  });
+
   const wss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.BOARD });
 
   wss.on('connection', (ws, req) => {
@@ -433,25 +511,48 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
 }
 
 async function handleClientMessage(ws: WebSocket, msg: any, setClientId: (id: string) => void) {
-  const { type, clientId, sessionDuration, sessionId, payload, direction, id } = msg;
+  const { type, clientId, sessionDuration, sessionId, payload, direction, id, token, userId: msgUserId } = msg;
 
   if (type === 'REQUEST_BOARD') {
-    const newClientId = clientId || `CLIENT-${Date.now()}`;
+    let resolvedUserId: string | undefined;
+
+    if (token) {
+      const user = await prisma.user.findUnique({ where: { token } });
+      if (user) resolvedUserId = user.id;
+    }
+
+    const newClientId = clientId || resolvedUserId || `CLIENT-${Date.now()}`;
 
     let client = await prisma.client.findUnique({ where: { clientId: newClientId } });
     if (!client) {
       client = await prisma.client.create({
-        data: { clientId: newClientId, status: 'CONNECTED' },
+        data: { clientId: newClientId, userId: resolvedUserId, status: 'CONNECTED' },
       });
     } else {
       await prisma.client.update({
         where: { id: client.id },
-        data: { status: 'CONNECTED', connectedAt: new Date() },
+        data: { status: 'CONNECTED', userId: resolvedUserId, connectedAt: new Date() },
+      });
+    }
+
+    if (resolvedUserId) {
+      await prisma.user.update({
+        where: { id: resolvedUserId },
+        data: { clientId: newClientId },
       });
     }
 
     setClientId(newClientId);
     clientConnections.set(newClientId, ws);
+
+    // Send user info back to client
+    ws.send(JSON.stringify({
+      type: 'AUTH_INFO',
+      version: MESSAGE_VERSION,
+      timestamp: Date.now(),
+      userId: resolvedUserId,
+      clientId: newClientId,
+    }));
 
     const idleBoards = await prisma.board.findMany({ where: { status: 'IDLE' } });
 

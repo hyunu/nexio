@@ -20,9 +20,23 @@ model Board {
   wsConnection String?
 }
 
+model User {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  email     String?
+  orgName   String?
+  active    Boolean  @default(true)
+  token     String?  @unique
+  clientId  String?  @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
 model Client {
   id           String    @id @default(uuid())
   clientId     String    @unique
+  userId       String?
   status       String    @default("DISCONNECTED")
   connectedAt  DateTime  @default(now())
   updatedAt    DateTime  @updatedAt

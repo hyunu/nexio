@@ -9,15 +9,15 @@ let ws: WebSocket | null = null;
 let serialPort: SerialPort | null = null;
 let parser: ReadlineParser | null = null;
 
-const isDev = !app.isPackaged;
+const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 
 log.initialize();
 log.info('Nexio Client starting...');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1000,
+    height: 720,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -148,4 +148,66 @@ ipcMain.handle('ws:close', async () => {
 
 ipcMain.handle('ws:isConnected', async () => {
   return ws && ws.readyState === WebSocket.OPEN;
+});
+
+const API_BASE = 'http://localhost:10008/api';
+
+const http = require('http');
+
+function apiPost(path: string, body: object): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const options = {
+      hostname: 'localhost',
+      port: 10008,
+      path: `/api${path}`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+      },
+    };
+    const req = http.request(options, (res: any) => {
+      let responseBody = '';
+      res.on('data', (chunk: any) => (responseBody += chunk));
+      res.on('end', () => {
+        try {
+          resolve({ ok: res.statusCode! >= 200 && res.statusCode! < 300, data: JSON.parse(responseBody) });
+        } catch {
+          resolve({ ok: false, data: { message: responseBody } });
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+ipcMain.handle('auth:login', async (_, { username, password }) => {
+  try {
+    const { ok, data } = await apiPost('/auth/login', { username, password });
+    if (!ok) {
+      return { success: false, error: data.message || 'Login failed' };
+    }
+    log.info('Login success for', username);
+    return { success: true, data };
+  } catch (err) {
+    log.error('auth:login error:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+ipcMain.handle('auth:register', async (_, { username, password, email, orgName }) => {
+  try {
+    const { ok, data } = await apiPost('/auth/register', { username, password, email, orgName });
+    if (!ok) {
+      return { success: false, error: data.message || 'Registration failed' };
+    }
+    log.info('Register success for', username);
+    return { success: true, data };
+  } catch (err) {
+    log.error('auth:register error:', err);
+    return { success: false, error: String(err) };
+  }
 });
