@@ -12,4 +12,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('serial:data', (_, data) => callback(data));
     },
   },
+  server: {
+    claim: (options: { serverUrl: string; macAddress: string }) =>
+      ipcRenderer.invoke('server:claim', options),
+    checkOnboarding: (options: { serverUrl: string; macAddress: string }) =>
+      ipcRenderer.invoke('server:checkOnboarding', options),
+  },
 });

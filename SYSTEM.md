@@ -79,7 +79,8 @@ nexio/
 │       ├── design.md                  #   PC Config 상세 설계
 │       ├── src/renderer/App.tsx       #   WiFi/Server URL 설정 UI
 │       ├── src/main.ts                #   SerialPort 통신
-│       └── lib/                       #   (Flutter 버전, 미사용)
+│       ├── src/preload.ts             #   IPC 브릿지 (server:claim, server:checkOnboarding)
+│       └── src/main.ts                #   SerialPort 통신 + REST API IPC
 │
 └── packages/
     └── shared-types/                  # 공통 TypeScript 타입
@@ -438,6 +439,8 @@ lib/
 
 ### 6.6 PC Config App
 
+Electron 데스크톱 앱. 모바일 BLE 온보딩의 대체 수단으로, USB 시리얼(UART)을 통해 ESP32에 WiFi 설정을 전송한다.
+
 ```
 src/renderer/App.tsx
 │
@@ -448,11 +451,25 @@ src/renderer/App.tsx
 ├── Configuration Form
 │   ├── WiFi SSID
 │   ├── WiFi Password
-│   └── Server URL
+│   ├── Server URL
+│   └── MAC Address (선택)
 │
-└── JSON 전송
-    {"ssid": "...", "password": "...", "serverUrl": "..."}
+├── Onboarding Flow (claim → send → wait)
+│   ├── 1. Server POST /api/onboarding/claim → uniqueId 발급
+│   ├── 2. 시리얼 JSON 전송 (ssid + password + serverUrl + uniqueId)
+│   └── 3. Server GET /api/boards/onboarding?mac=... 폴링 (30s)
+│
+└── Log Window
+    ├── 전송/수신 데이터
+    └── 상태 메시지
 ```
+
+**온보딩 JSON 포맷:**
+```json
+{"ssid":"...","password":"...","serverUrl":"ws://.../ws/board","uniqueId":"0042"}
+```
+
+**주의:** ESP32 펌웨어가 UART로 수신한 JSON 설정을 파싱하여 `onWiFiConfigured()`를 호출하도록 추가 구현 필요. (현재 UART 핸들러는 모든 데이터를 제품(P) 데이터로 간주하여 서버로 전달함)
 
 ---
 

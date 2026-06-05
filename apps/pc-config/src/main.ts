@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
+import * as http from 'http';
+import * as https from 'https';
 import log from 'electron-log';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
@@ -15,7 +17,7 @@ log.initialize();
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 600,
-    height: 700,
+    height: 750,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -40,6 +42,38 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
+function httpRequest(url: string, method: string, body?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const mod = urlObj.protocol === 'https:' ? https : http;
+    const options: http.RequestOptions = {
+      hostname: urlObj.hostname,
+      port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+      path: urlObj.pathname + urlObj.search,
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 5000,
+    };
+    const req = mod.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function toHttpUrl(wsUrl: string): string {
+  return wsUrl
+    .replace('wss://', 'https://')
+    .replace('ws://', 'http://')
+    .replace('/ws/board', '')
+    .replace('/ws/client', '');
+}
 
 ipcMain.handle('serial:list', async () => {
   try {
@@ -95,4 +129,25 @@ ipcMain.handle('serial:close', async () => {
 
 ipcMain.handle('serial:isOpen', async () => {
   return serialPort?.isOpen || false;
+});
+
+ipcMain.handle('server:claim', async (_, { serverUrl, macAddress }: { serverUrl: string; macAddress: string }) => {
+  try {
+    const httpUrl = toHttpUrl(serverUrl);
+    const result = await httpRequest(`${httpUrl}/api/onboarding/claim`, 'POST', JSON.stringify({ macAddress }));
+    return JSON.parse(result);
+  } catch (err) {
+    log.error('Claim error:', err);
+    return { error: String(err) };
+  }
+});
+
+ipcMain.handle('server:checkOnboarding', async (_, { serverUrl, macAddress }: { serverUrl: string; macAddress: string }) => {
+  try {
+    const httpUrl = toHttpUrl(serverUrl);
+    const result = await httpRequest(`${httpUrl}/api/boards/onboarding?mac=${encodeURIComponent(macAddress)}`, 'GET');
+    return JSON.parse(result);
+  } catch (err) {
+    return { registered: false, error: String(err) };
+  }
 });
