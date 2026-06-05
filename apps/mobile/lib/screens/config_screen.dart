@@ -40,6 +40,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
   @override
   void initState() {
     super.initState();
+    _ssidController.text = "hyunu_2.4Ghz";
+    _passwordController.text = "gusdn1006";
     _serverUrlController.text = widget.serverUrl;
     _connectToDevice();
   }

@@ -20,27 +20,24 @@ class BleScanner {
   static const int _flagWifi = 0x04;
   static const int _flagCfg = 0x08;
 
-  StreamController<List<ScanResult>>? _scanController;
+  final StreamController<List<ScanResult>> _scanController =
+      StreamController<List<ScanResult>>.broadcast();
+  StreamSubscription<List<ScanResult>>? _fbpSubscription;
 
-  Stream<List<ScanResult>> get scanResults {
-    _scanController ??= StreamController<List<ScanResult>>.broadcast();
-    return _scanController!.stream;
-  }
+  Stream<List<ScanResult>> get scanResults => _scanController.stream;
 
-  static NexioDeviceState parseStateFromAdData(AdvertisementData? data) {
-    if (data == null) return NexioDeviceState.unconfigured;
-
-    final mfgData = data.manufacturerData;
-    if (mfgData == null || mfgData.isEmpty) {
+  static NexioDeviceState parseStateFromAdData(AdvertisementData data) {
+    final mfgMap = data.manufacturerData;
+    if (mfgMap.isEmpty) {
       return NexioDeviceState.unconfigured;
     }
 
-    if (mfgData.length < 3) return NexioDeviceState.unconfigured;
+    final mfgData = mfgMap[_mfgCompanyId];
+    if (mfgData == null || mfgData.length < 1) {
+      return NexioDeviceState.unconfigured;
+    }
 
-    final companyId = (mfgData[1] << 8) | mfgData[0];
-    if (companyId != _mfgCompanyId) return NexioDeviceState.unconfigured;
-
-    final flags = mfgData[2];
+    final flags = mfgData[0];
     final cfg = (flags & _flagCfg) != 0;
     final wifi = (flags & _flagWifi) != 0;
     final svr = (flags & _flagSvr) != 0;
@@ -55,85 +52,20 @@ class BleScanner {
   }
 
   Future<void> startScan({Duration timeout = const Duration(seconds: 10)}) async {
-    _scanController ??= StreamController<List<ScanResult>>.broadcast();
+    _fbpSubscription?.cancel();
 
     await FlutterBluePlus.startScan(
-      withServices: [Guid(_serviceUuid)],
       timeout: timeout,
     );
 
-    FlutterBluePlus.scanResults.listen((results) {
-      _scanController?.add(results);
+    _fbpSubscription = FlutterBluePlus.scanResults.listen((results) {
+      _scanController.add(results);
     });
   }
 
   Future<void> stopScan() async {
-    await FlutterBluePlus.stopScan();
-  }
-
-  Future<bool> sendConfig(
-    BluetoothDevice device,
-    Map<String, String> config,
-  ) async {
-    try {
-      List<BluetoothService> services = await device.discoverServices();
-
-      for (var service in services) {
-        if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
-          for (var characteristic in service.characteristics) {
-            if (characteristic.uuid.str.toLowerCase() ==
-                _charWriteUuid.toLowerCase()) {
-              String jsonString = _createConfigJson(config);
-              await characteristic.write(jsonString.codeUnits);
-              return true;
-            }
-          }
-        }
-      }
-
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  String _createConfigJson(Map<String, String> config) {
-    final buffer = StringBuffer();
-    buffer.write('{');
-    buffer.write('"ssid":"${_escapeJson(config['ssid'] ?? '')}",');
-    buffer.write('"password":"${_escapeJson(config['password'] ?? '')}",');
-    buffer.write('"serverUrl":"${_escapeJson(config['serverUrl'] ?? '")');
-    final uniqueId = config['uniqueId'];
-    if (uniqueId != null && uniqueId.isNotEmpty) {
-      buffer.write(',"uniqueId":"${_escapeJson(uniqueId)}"');
-    }
-    buffer.write('}');
-    return buffer.toString();
-  }
-
-  String _escapeJson(String value) {
-    return value
-        .replaceAll('\\', '\\\\')
-        .replaceAll('"', '\\"')
-        .replaceAll('\n', '\\n')
-        .replaceAll('\r', '\\r');
-  }
-}
-
-  Future<void> startScan({Duration timeout = const Duration(seconds: 10)}) async {
-    _scanController ??= StreamController<List<ScanResult>>.broadcast();
-
-    await FlutterBluePlus.startScan(
-      withServices: [Guid(_serviceUuid)],
-      timeout: timeout,
-    );
-
-    FlutterBluePlus.scanResults.listen((results) {
-      _scanController?.add(results);
-    });
-  }
-
-  Future<void> stopScan() async {
+    _fbpSubscription?.cancel();
+    _fbpSubscription = null;
     await FlutterBluePlus.stopScan();
   }
 

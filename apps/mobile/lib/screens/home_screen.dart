@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../ble/ble_scanner.dart';
@@ -18,12 +19,20 @@ class _HomeScreenState extends State<HomeScreen> {
   List<ScanResult> _devices = [];
   bool _isScanning = false;
   String? _savedServerUrl;
+  StreamSubscription? _scanSubscription;
 
   @override
   void initState() {
     super.initState();
     _loadSavedServerUrl();
     _startScan();
+  }
+
+  @override
+  void dispose() {
+    _scanSubscription?.cancel();
+    _bleScanner.stopScan();
+    super.dispose();
   }
 
   Future<void> _loadSavedServerUrl() async {
@@ -34,23 +43,43 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startScan() async {
+    if (!mounted) return;
     setState(() {
       _isScanning = true;
       _devices = [];
     });
 
-    _bleScanner.startScan(timeout: const Duration(seconds: 10));
-
-    _bleScanner.scanResults.listen((results) {
+    _scanSubscription?.cancel();
+    _scanSubscription = _bleScanner.scanResults.listen((results) {
+      if (!mounted) return;
       setState(() {
         _devices = results
-            .where((r) => r.device.name.startsWith('Nexio'))
+            .where((r) {
+              if (r.device.name.startsWith('Nexio')) return true;
+              final mfg = r.advertisementData.manufacturerData;
+              if (mfg.containsKey(0x02D5)) return true;
+              final uuids = r.advertisementData.serviceUuids;
+              if (uuids.any((u) => u.str.toLowerCase().contains('6e400001'))) return true;
+              return false;
+            })
             .toList();
       });
     });
 
+    try {
+      await _bleScanner.startScan(timeout: const Duration(seconds: 10));
+    } catch (e) {
+      debugPrint('Scan start failed: $e');
+      _scanSubscription?.cancel();
+      if (mounted) {
+        setState(() => _isScanning = false);
+      }
+      return;
+    }
+
     await Future.delayed(const Duration(seconds: 10));
 
+    if (!mounted) return;
     setState(() {
       _isScanning = false;
     });
@@ -76,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _onDeviceSelected(ScanResult device) {
     final state = BleScanner.parseStateFromAdData(device.advertisementData);
-    if (state == NexioDeviceState.unconfigured) {
+    if (state != NexioDeviceState.connected && state != NexioDeviceState.fullConnected) {
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -149,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                       final color = _stateColors[state] ?? Colors.grey;
                       final label = _stateLabels[state] ?? '';
-                      final canTap = state == NexioDeviceState.unconfigured;
+                      final canTap = state == NexioDeviceState.unconfigured || state == NexioDeviceState.configuring || state == NexioDeviceState.wifiOnly;
                       return ListTile(
                         leading: CircleAvatar(
                           backgroundColor: color,

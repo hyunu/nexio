@@ -1,3 +1,4 @@
+#include <cstring>
 #include "base64.h"
 
 static const char* base64_chars =

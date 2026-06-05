@@ -12,7 +12,7 @@ export const BLE_UUID = {
 } as const;
 
 export const HEARTBEAT_INTERVAL_MS = 30000;
-export const HEARTBEAT_TIMEOUT_MS = 60000;
+export const HEARTBEAT_TIMEOUT_MS = 9000;
 export const WIFI_RECONNECT_INTERVAL_MS = 3000;
 export const WS_RECONNECT_INTERVAL_MS = 5000;
 

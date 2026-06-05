@@ -1,17 +1,38 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import crypto from 'crypto';
+import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PrismaClient } from '@prisma/client';
 import { WEBSOCKET_PATHS, MESSAGE_VERSION, HEARTBEAT_TIMEOUT_MS } from '@nexio/shared-types';
+
+const LOG_FILE = '/tmp/nexio-debug.log';
+function debugLog(msg: string) {
+  fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`);
+}
 
 const PORT = parseInt(process.env.PORT || '10008');
 
 const boardConnections = new Map<string, WebSocket>();
 const clientConnections = new Map<string, WebSocket>();
 const heartbeatTimers = new Map<string, NodeJS.Timeout>();
+const boardCommandQueues = new Map<string, any[]>();
 
 const prisma = new PrismaClient();
+
+function queueBoardCommand(boardId: string, cmd: any) {
+  const existing = boardCommandQueues.get(boardId) || [];
+  existing.push(cmd);
+  boardCommandQueues.set(boardId, existing);
+}
+
+function sendToBoard(boardId: string, cmd: any) {
+  const ws = boardConnections.get(boardId);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(cmd));
+  }
+  queueBoardCommand(boardId, cmd);
+}
 
 async function start() {
   const fastify = Fastify({ logger: true });
@@ -43,7 +64,7 @@ async function start() {
     const board = await prisma.board.findFirst({
       where: { macAddress: mac },
     });
-    if (board) {
+    if (board && (board.status === 'IDLE' || board.status === 'BUSY')) {
       return { registered: true, board: { uniqueId: board.uniqueId, status: board.status } };
     }
     return { registered: false };
@@ -66,6 +87,10 @@ async function start() {
       where: { macAddress },
     });
     if (existingBoard && existingBoard.uniqueId) {
+      await prisma.board.update({
+        where: { id: existingBoard.id },
+        data: { status: 'CLAIMED' },
+      });
       return { uniqueId: existingBoard.uniqueId };
     }
 
@@ -115,17 +140,15 @@ async function start() {
     const boardWs = boardConnections.get(board.uniqueId);
     const clientWs = clientConnections.get(client.clientId);
 
-    if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-      boardWs.send(JSON.stringify({
-        type: 'BOARD_READY',
-        version: MESSAGE_VERSION,
-        timestamp: Date.now(),
-        boardId: board.uniqueId,
-        sessionId: session.id,
-        assignedAt: now.getTime(),
-        expiresAt: expiresAt.getTime(),
-      }));
-    }
+    sendToBoard(board.uniqueId, {
+      type: 'BOARD_READY',
+      version: MESSAGE_VERSION,
+      timestamp: Date.now(),
+      boardId: board.uniqueId,
+      sessionId: session.id,
+      assignedAt: now.getTime(),
+      expiresAt: expiresAt.getTime(),
+    });
 
     if (clientWs && clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({
@@ -162,17 +185,14 @@ async function start() {
 
     const board = await prisma.board.findUnique({ where: { id: session.boardId } });
     if (board) {
-      const boardWs = boardConnections.get(board.uniqueId);
-      if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-        boardWs.send(JSON.stringify({
-          type: 'CONTROL',
-          version: MESSAGE_VERSION,
-          timestamp: Date.now(),
-          targetId: board.uniqueId,
-          action: 'DISCONNECT',
-          reason: 'session_terminated',
-        }));
-      }
+      sendToBoard(board.uniqueId, {
+        type: 'CONTROL',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        targetId: board.uniqueId,
+        action: 'DISCONNECT',
+        reason: 'session_terminated',
+      });
     }
 
     return { success: true };
@@ -195,18 +215,15 @@ async function start() {
       data: { status: 'DISCARDED' },
     });
 
-    const boardWs = boardConnections.get(id);
-    if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-      boardWs.send(JSON.stringify({
-        type: 'CONTROL',
-        version: MESSAGE_VERSION,
-        timestamp: Date.now(),
-        targetId: id,
-        action: 'FACTORY_RESET',
-        reason: 'board_discarded',
-      }));
-      boardConnections.delete(id);
-    }
+    sendToBoard(id, {
+      type: 'CONTROL',
+      version: MESSAGE_VERSION,
+      timestamp: Date.now(),
+      targetId: id,
+      action: 'DISCARD',
+      reason: 'board_discarded',
+    });
+    boardConnections.delete(id);
 
     return { success: true, discarded: true };
   });
@@ -217,17 +234,14 @@ async function start() {
     if (type === 'board') {
       const board = await prisma.board.findUnique({ where: { uniqueId: targetId } });
       if (board) {
-        const ws = boardConnections.get(targetId);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'CONTROL',
-            version: MESSAGE_VERSION,
-            timestamp: Date.now(),
-            targetId,
-            action,
-            reason: 'admin_request',
-          }));
-        }
+        sendToBoard(targetId, {
+          type: 'CONTROL',
+          version: MESSAGE_VERSION,
+          timestamp: Date.now(),
+          targetId,
+          action,
+          reason: 'admin_request',
+        });
       }
     } else if (type === 'client') {
       const ws = clientConnections.get(targetId);
@@ -244,6 +258,114 @@ async function start() {
     }
 
     return { success: true };
+  });
+
+  fastify.post('/api/board/message', async (request: any, reply) => {
+    const msg = request.body;
+    const { type, boardId: macAddr, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId, sourceId } = msg;
+    const commands: any[] = [];
+
+    if (type === 'REGISTER') {
+      let uniqueId: string;
+
+      if (preAssignedId) {
+        const claimed = await prisma.board.findUnique({ where: { uniqueId: preAssignedId } });
+        if (claimed) {
+          if (claimed.status === 'DISCARDED') {
+            await prisma.board.delete({ where: { id: claimed.id } });
+          } else {
+            uniqueId = claimed.uniqueId;
+            await prisma.board.updateMany({
+              where: { macAddress: macAddr, NOT: { id: claimed.id } },
+              data: { macAddress: null },
+            });
+            await prisma.board.update({
+              where: { id: claimed.id },
+              data: { macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE', connectedAt: new Date() },
+            });
+          }
+        }
+        if (!claimed || claimed.status === 'DISCARDED') {
+          uniqueId = preAssignedId;
+          await prisma.board.create({
+            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE' },
+          });
+        }
+      } else {
+        const existingBoard = await prisma.board.findFirst({ where: { macAddress: macAddr } });
+        if (existingBoard) {
+          if (existingBoard.status === 'DISCARDED') {
+            await prisma.board.delete({ where: { id: existingBoard.id } });
+          } else {
+            uniqueId = existingBoard.uniqueId;
+            await prisma.board.update({
+              where: { id: existingBoard.id },
+              data: { status: 'IDLE', connectedAt: new Date() },
+            });
+          }
+        }
+        if (!existingBoard || existingBoard.status === 'DISCARDED') {
+          const count = await prisma.board.count();
+          uniqueId = `${String(count + 1).padStart(4, '0')}`;
+          await prisma.board.create({
+            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE' },
+          });
+        }
+      }
+
+      const pending = boardCommandQueues.get(uniqueId) || [];
+      boardCommandQueues.delete(uniqueId);
+      commands.push(...pending);
+
+      commands.push({ type: 'ASSIGN_ID', version: MESSAGE_VERSION, timestamp: Date.now(), uniqueId, serverTime: Date.now() });
+
+      startHeartbeatTimer(uniqueId);
+
+      return { commands, uniqueId };
+    }
+
+    if (type === 'HEARTBEAT') {
+      const boardId = id || preAssignedId;
+      if (boardId) {
+        resetHeartbeatTimer(boardId);
+        const pending = boardCommandQueues.get(boardId) || [];
+        boardCommandQueues.delete(boardId);
+        commands.push(...pending);
+      }
+      return { commands };
+    }
+
+    if (type === 'DISCARD_ACK') {
+      const boardId = id;
+      if (boardId) {
+        await prisma.board.delete({ where: { uniqueId: boardId } }).catch(() => {});
+        boardCommandQueues.delete(boardId);
+        boardConnections.delete(boardId);
+        clearHeartbeatTimer(boardId);
+      }
+      return { success: true };
+    }
+
+    if (type === 'DATA_RELAY' && sessionId) {
+      const boardUniqueId = sourceId || id || macAddr;
+      if (boardUniqueId) resetHeartbeatTimer(boardUniqueId);
+      const session = await prisma.session.findUnique({ where: { id: sessionId } });
+      if (session) {
+        const client = await prisma.client.findUnique({ where: { id: session.clientId } });
+        if (client) {
+          const clientWs = clientConnections.get(client.clientId);
+          if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'DATA_RELAY', version: MESSAGE_VERSION, timestamp: Date.now(),
+              sessionId, sourceId: macAddr || id, direction, payload,
+            }));
+          }
+        }
+      }
+      return { commands };
+    }
+
+    return { commands };
   });
 
   fastify.get('/api/users', async () => {
@@ -326,18 +448,27 @@ async function start() {
   const wss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.BOARD });
 
   wss.on('connection', (ws, req) => {
+    debugLog(`Board WS connected from ${req.socket.remoteAddress}`);
     let boardId: string | null = null;
+
+    ws.on('error', (err) => {
+      debugLog(`Board WS error: ${err}`);
+    });
 
     ws.on('message', async (data) => {
       try {
+        debugLog(`Board WS raw: ${data.toString().substring(0, 200)}`);
         const msg = JSON.parse(data.toString());
+        debugLog(`Board WS parsed: type=${msg.type}, boardId=${msg.boardId}, preAssignedId=${msg.uniqueId}`);
         await handleBoardMessage(ws, msg, (id) => { boardId = id; });
       } catch (err) {
+        debugLog(`Board message error: ${err}`);
         console.error('Board message error:', err);
       }
     });
 
-    ws.on('close', async () => {
+    ws.on('close', async (code, reason) => {
+      debugLog(`Board WS close: code=${code}, reason=${reason ? reason.toString() : 'none'}`);
       if (boardId) {
         boardConnections.delete(boardId!);
         clearHeartbeatTimer(boardId!);
@@ -377,10 +508,16 @@ async function start() {
 
   await fastify.listen({ port: PORT, host: '0.0.0.0' });
 
+  await prisma.board.updateMany({
+    where: { status: { in: ['IDLE', 'BUSY'] } },
+    data: { status: 'OFFLINE' },
+  });
+
   setInterval(checkExpiredSessions, 60000);
 }
 
 async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: string) => void) {
+  try {
   const { type, boardId, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId } = msg;
 
   if (type === 'REGISTER') {
@@ -392,29 +529,26 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       });
       if (claimed) {
         if (claimed.status === 'DISCARDED') {
-          ws.send(JSON.stringify({
-            type: 'CONTROL',
-            version: MESSAGE_VERSION,
-            timestamp: Date.now(),
-            targetId: claimed.uniqueId,
-            action: 'FACTORY_RESET',
-            reason: 'board_discarded',
-          }));
-          ws.close();
-          return;
+          await prisma.board.delete({ where: { id: claimed.id } });
+        } else {
+          uniqueId = claimed.uniqueId;
+          await prisma.board.updateMany({
+            where: { macAddress: boardId, NOT: { id: claimed.id } },
+            data: { macAddress: null },
+          });
+          await prisma.board.update({
+            where: { id: claimed.id },
+            data: {
+              macAddress: boardId,
+              firmwareVersion,
+              displayAvailable,
+              status: 'IDLE',
+              connectedAt: new Date(),
+            },
+          });
         }
-        uniqueId = claimed.uniqueId;
-        await prisma.board.update({
-          where: { id: claimed.id },
-          data: {
-            macAddress: boardId,
-            firmwareVersion,
-            displayAvailable,
-            status: 'IDLE',
-            connectedAt: new Date(),
-          },
-        });
-      } else {
+      }
+      if (!claimed || claimed.status === 'DISCARDED') {
         uniqueId = preAssignedId;
         await prisma.board.create({
           data: {
@@ -433,23 +567,16 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
 
       if (existingBoard) {
         if (existingBoard.status === 'DISCARDED') {
-          ws.send(JSON.stringify({
-            type: 'CONTROL',
-            version: MESSAGE_VERSION,
-            timestamp: Date.now(),
-            targetId: existingBoard.uniqueId,
-            action: 'FACTORY_RESET',
-            reason: 'board_discarded',
-          }));
-          ws.close();
-          return;
+          await prisma.board.delete({ where: { id: existingBoard.id } });
+        } else {
+          uniqueId = existingBoard.uniqueId;
+          await prisma.board.update({
+            where: { id: existingBoard.id },
+            data: { status: 'IDLE', connectedAt: new Date() },
+          });
         }
-        uniqueId = existingBoard.uniqueId;
-        await prisma.board.update({
-          where: { id: existingBoard.id },
-          data: { status: 'IDLE', connectedAt: new Date() },
-        });
-      } else {
+      }
+      if (!existingBoard || existingBoard.status === 'DISCARDED') {
         const count = await prisma.board.count();
         uniqueId = `${String(count + 1).padStart(4, '0')}`;
         await prisma.board.create({
@@ -508,9 +635,13 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       }
     }
   }
+  } catch (err) {
+    console.error(`[handleBoardMessage] Error:`, err);
+    ws.close(1011, 'Internal error');
+  }
 }
 
-async function handleClientMessage(ws: WebSocket, msg: any, setClientId: (id: string) => void) {
+  async function handleClientMessage(ws: WebSocket, msg: any, setClientId: (id: string) => void) {
   const { type, clientId, sessionDuration, sessionId, payload, direction, id, token, userId: msgUserId } = msg;
 
   if (type === 'REQUEST_BOARD') {
@@ -586,17 +717,16 @@ async function handleClientMessage(ws: WebSocket, msg: any, setClientId: (id: st
     });
 
     const boardWs = boardConnections.get(board.uniqueId);
-    if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-      boardWs.send(JSON.stringify({
-        type: 'BOARD_READY',
-        version: MESSAGE_VERSION,
-        timestamp: Date.now(),
-        boardId: board.uniqueId,
-        sessionId: session.id,
-        assignedAt: now.getTime(),
-        expiresAt: expiresAt.getTime(),
-      }));
-    }
+
+    sendToBoard(board.uniqueId, {
+      type: 'BOARD_READY',
+      version: MESSAGE_VERSION,
+      timestamp: Date.now(),
+      boardId: board.uniqueId,
+      sessionId: session.id,
+      assignedAt: now.getTime(),
+      expiresAt: expiresAt.getTime(),
+    });
 
     ws.send(JSON.stringify({
       type: 'BOARD_READY',
@@ -626,18 +756,15 @@ async function handleClientMessage(ws: WebSocket, msg: any, setClientId: (id: st
     if (session) {
       const board = await prisma.board.findUnique({ where: { id: session.boardId } });
       if (board) {
-        const boardWs = boardConnections.get(board.uniqueId);
-        if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-          boardWs.send(JSON.stringify({
-            type: 'DATA_RELAY',
-            version: MESSAGE_VERSION,
-            timestamp: Date.now(),
-            sessionId,
-            sourceId: clientId || id,
-            direction,
-            payload,
-          }));
-        }
+        sendToBoard(board.uniqueId, {
+          type: 'DATA_RELAY',
+          version: MESSAGE_VERSION,
+          timestamp: Date.now(),
+          sessionId,
+          sourceId: clientId || id,
+          direction,
+          payload,
+        });
       }
     }
   }
@@ -657,6 +784,7 @@ function startHeartbeatTimer(id: string) {
     const ws = boardConnections.get(id);
     if (ws) ws.close();
     boardConnections.delete(id);
+    // If board was HTTP-based, it's fine — it'll reconnect on next heartbeat
   }, HEARTBEAT_TIMEOUT_MS);
   heartbeatTimers.set(id, timer);
 }
@@ -694,17 +822,14 @@ async function checkExpiredSessions() {
       data: { status: 'IDLE' },
     });
 
-    const boardWs = boardConnections.get(session.board.uniqueId);
-    if (boardWs && boardWs.readyState === WebSocket.OPEN) {
-      boardWs.send(JSON.stringify({
-        type: 'CONTROL',
-        version: MESSAGE_VERSION,
-        timestamp: Date.now(),
-        targetId: session.board.uniqueId,
-        action: 'DISCONNECT',
-        reason: 'session_expired',
-      }));
-    }
+    sendToBoard(session.board.uniqueId, {
+      type: 'CONTROL',
+      version: MESSAGE_VERSION,
+      timestamp: Date.now(),
+      targetId: session.board.uniqueId,
+      action: 'DISCONNECT',
+      reason: 'session_expired',
+    });
 
     const clientWs = clientConnections.get(session.client.clientId);
     if (clientWs && clientWs.readyState === WebSocket.OPEN) {
