@@ -187,6 +187,10 @@ void connectWiFi() {
   String pass = getWifiPass();
 
   if (ssid.length() > 0) {
+    WiFi.disconnect(true);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(100);
     Serial.print("[WIFI] Connecting to "); Serial.println(ssid);
     WiFi.begin(ssid.c_str(), pass.c_str());
     int attempts = 0;
@@ -201,7 +205,10 @@ void connectWiFi() {
       Serial.println(WiFi.localIP());
       delay(500);
     } else {
-      Serial.println("[WIFI] Failed to connect");
+      Serial.print("[WIFI] Failed, status=");
+      Serial.println(WiFi.status());
+      if (WiFi.status() == WL_NO_SSID_AVAIL) Serial.println("[WIFI] Network not found");
+      else if (WiFi.status() == WL_CONNECT_FAILED) Serial.println("[WIFI] Wrong password");
     }
   }
 }

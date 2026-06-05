@@ -77,10 +77,10 @@ async function start() {
     return clients;
   });
 
-  fastify.post('/api/onboarding/claim', async (request: any) => {
+  fastify.post('/api/onboarding/claim', async (request: any, reply: any) => {
     const { macAddress } = request.body;
     if (!macAddress) {
-      return { error: 'MAC address is required' }, 400;
+      return reply.status(400).send({ error: 'MAC address is required' });
     }
 
     const existingBoard = await prisma.board.findFirst({
@@ -94,16 +94,27 @@ async function start() {
       return { uniqueId: existingBoard.uniqueId };
     }
 
-    const count = await prisma.board.count();
-    const uniqueId = `${String(count + 1).padStart(4, '0')}`;
-
-    await prisma.board.create({
-      data: {
-        uniqueId,
-        macAddress,
-        status: 'CLAIMED',
-      },
+    const lastBoard = await prisma.board.findFirst({
+      orderBy: { uniqueId: 'desc' },
+      select: { uniqueId: true },
     });
+    const nextNum = lastBoard ? parseInt(lastBoard.uniqueId, 10) + 1 : 1;
+    const uniqueId = `${String(nextNum).padStart(4, '0')}`;
+
+    try {
+      await prisma.board.create({
+        data: {
+          uniqueId,
+          macAddress,
+          status: 'CLAIMED',
+        },
+      });
+    } catch (err: any) {
+      if (err.code === 'P2002') {
+        return reply.status(409).send({ error: 'Board already exists with this MAC or ID' });
+      }
+      throw err;
+    }
 
     return { uniqueId };
   });
@@ -281,7 +292,7 @@ async function start() {
             });
             await prisma.board.update({
               where: { id: claimed.id },
-              data: { macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE', connectedAt: new Date() },
+              data: { firmwareVersion, displayAvailable, status: 'IDLE', connectedAt: new Date() },
             });
           }
         }
@@ -305,8 +316,12 @@ async function start() {
           }
         }
         if (!existingBoard || existingBoard.status === 'DISCARDED') {
-          const count = await prisma.board.count();
-          uniqueId = `${String(count + 1).padStart(4, '0')}`;
+          const lastBoard = await prisma.board.findFirst({
+            orderBy: { uniqueId: 'desc' },
+            select: { uniqueId: true },
+          });
+          const nextNum = lastBoard ? parseInt(lastBoard.uniqueId, 10) + 1 : 1;
+          uniqueId = `${String(nextNum).padStart(4, '0')}`;
           await prisma.board.create({
             data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE' },
           });
@@ -445,7 +460,23 @@ async function start() {
     return { userId: user.id, username: user.username, email: user.email, orgName: user.orgName, token: user.token };
   });
 
-  const wss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.BOARD });
+  const wss = new WebSocketServer({ noServer: true });
+  const clientWss = new WebSocketServer({ noServer: true });
+
+  fastify.server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
+    if (url.pathname === WEBSOCKET_PATHS.BOARD) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else if (url.pathname === WEBSOCKET_PATHS.CLIENT) {
+      clientWss.handleUpgrade(request, socket, head, (ws) => {
+        clientWss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
 
   wss.on('connection', (ws, req) => {
     debugLog(`Board WS connected from ${req.socket.remoteAddress}`);
@@ -479,8 +510,6 @@ async function start() {
       }
     });
   });
-
-  const clientWss = new WebSocketServer({ server: fastify.server, path: WEBSOCKET_PATHS.CLIENT });
 
   clientWss.on('connection', (ws, req) => {
     let clientId: string | null = null;
@@ -539,7 +568,6 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
           await prisma.board.update({
             where: { id: claimed.id },
             data: {
-              macAddress: boardId,
               firmwareVersion,
               displayAvailable,
               status: 'IDLE',
@@ -577,8 +605,12 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
         }
       }
       if (!existingBoard || existingBoard.status === 'DISCARDED') {
-        const count = await prisma.board.count();
-        uniqueId = `${String(count + 1).padStart(4, '0')}`;
+        const lastBoard = await prisma.board.findFirst({
+          orderBy: { uniqueId: 'desc' },
+          select: { uniqueId: true },
+        });
+        const nextNum = lastBoard ? parseInt(lastBoard.uniqueId, 10) + 1 : 1;
+        uniqueId = `${String(nextNum).padStart(4, '0')}`;
         await prisma.board.create({
           data: {
             uniqueId,
