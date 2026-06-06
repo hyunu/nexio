@@ -23,6 +23,9 @@ bool registered = false;
 unsigned long lastServerMessage = 0;
 unsigned long lastRegisterAttempt = 0;
 
+bool rfidConnected = false;
+bool lastProductConnected = false;
+
 void updateStatusFlags();
 
 void setup() {
@@ -37,7 +40,7 @@ void setup() {
     setBleUniqueId(uniqueId);
     onboarded = true;
     initUART();
-    Serial.println("[BOOT] Config loaded, connecting WiFi...");
+    logDebug("[BOOT] ", "Config loaded, uniqueId=" + uniqueId + ", connecting WiFi...");
 
     String serverUrl = getServerUrl();
     int protocolStart = serverUrl.indexOf("://");
@@ -64,7 +67,7 @@ void loop() {
   if (wifiState && !wifiConnected) {
     wifiConnected = true;
     currentSsid = WiFi.SSID();
-    Serial.print("[LOOP] WiFi connected to "); Serial.println(currentSsid);
+    logDebug("[LOOP] ", "WiFi connected to " + currentSsid);
     bleLog("[WIFI] Connected to " + currentSsid + ", IP: " + WiFi.localIP().toString());
     delay(1000);
     registered = false;
@@ -73,7 +76,7 @@ void loop() {
     wifiConnected = false;
     productConnected = false;
     registered = false;
-    Serial.println("[LOOP] WiFi disconnected, reconnecting...");
+    logDebug("[LOOP] ", "WiFi disconnected, reconnecting...");
     reconnectWiFi();
   }
 
@@ -94,9 +97,9 @@ void loop() {
     Serial.print("[HTTP] Sending REGISTER...");
     BoardResponse resp;
     if (httpBoardMessage(serverHost, serverPort, output, resp)) {
-      Serial.println(" OK");
+      logDebug("[HTTP] ", "REGISTER OK");
       if (resp.hasAssignId && resp.uniqueId.length() > 0) {
-        Serial.print("[HTTP] ASSIGN_ID: "); Serial.println(resp.uniqueId);
+        logDebug("[HTTP] ", "ASSIGN_ID: " + resp.uniqueId);
         uniqueId = resp.uniqueId;
         setBleUniqueId(uniqueId);
         updateStatusFlags();
@@ -105,7 +108,7 @@ void loop() {
       registered = true;
       sendLog("info", "Board registered with server as " + uniqueId);
     } else {
-      Serial.println(" FAILED");
+      logDebug("[HTTP] ", "REGISTER FAILED");
       bleLog("[SVR] Register FAILED, retrying...");
     }
   }
@@ -126,14 +129,14 @@ void loop() {
       BoardResponse resp;
       if (httpBoardMessage(serverHost, serverPort, output, resp)) {
         if (resp.hasControl) {
-          Serial.print("[HTTP] CONTROL: "); Serial.println(resp.action);
+          logDebug("[HTTP] ", "CONTROL: " + resp.action);
           if (resp.action == "RESET") {
             ESP.restart();
           } else if (resp.action == "FACTORY_RESET") {
             clearConfig();
             ESP.restart();
           } else if (resp.action == "DISCARD") {
-            Serial.println("[HTTP] DISCARD received, sending ACK...");
+            logDebug("[HTTP] ", "DISCARD received, sending ACK...");
             JsonDocument ackDoc;
             ackDoc["type"] = "DISCARD_ACK";
             ackDoc["version"] = MESSAGE_VERSION;
@@ -143,16 +146,18 @@ void loop() {
             serializeJson(ackDoc, ackOutput);
             BoardResponse ackResp;
             httpBoardMessage(serverHost, serverPort, ackOutput, ackResp);
+            logDebug("[HTTP] ", "DISCARD_ACK sent, clearing config and restarting");
             clearConfig();
             ESP.restart();
           } else if (resp.action == "DISCONNECT") {
-            Serial.println("[HTTP] Disconnecting...");
+            logDebug("[HTTP] ", "DISCONNECT received");
           }
         }
         if (resp.hasDataRelay) {
           String base64Data = resp.payload;
           std::vector<uint8_t> binaryData = base64_decode(std::string(base64Data.c_str()));
           Serial1.write(binaryData.data(), binaryData.size());
+          logDebug("[HTTP] ", "Data relay C_TO_B: " + String(binaryData.size()) + " bytes");
         }
       }
     }
@@ -161,6 +166,10 @@ void loop() {
   productConnected = isProductConnected();
   if (productConnected && registered && uniqueId.length() > 0) {
     sendProductProbe();
+  }
+  if (productConnected != lastProductConnected) {
+    lastProductConnected = productConnected;
+    logDebug("[UART] ", productConnected ? "Product connected" : "Product disconnected");
   }
 
   updateStatusFlags();
@@ -207,22 +216,19 @@ void connectWiFi() {
     }
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.print("[WIFI] Connected, IP: ");
-      Serial.println(WiFi.localIP());
-      bleLog("[WIFI] Connected, IP: " + WiFi.localIP().toString());
+      logDebug("[WIFI] ", "Connected, IP: " + WiFi.localIP().toString());
       delay(500);
     } else {
-      Serial.print("[WIFI] Failed, status=");
-      Serial.println(WiFi.status());
-      if (WiFi.status() == WL_NO_SSID_AVAIL) { bleLog("[WIFI] Network not found"); Serial.println("[WIFI] Network not found"); }
-      else if (WiFi.status() == WL_CONNECT_FAILED) { bleLog("[WIFI] Wrong password"); Serial.println("[WIFI] Wrong password"); }
+      logDebug("[WIFI] ", "Failed, status=" + String(WiFi.status()));
+      if (WiFi.status() == WL_NO_SSID_AVAIL) { bleLog("[WIFI] Network not found"); }
+      else if (WiFi.status() == WL_CONNECT_FAILED) { bleLog("[WIFI] Wrong password"); }
       else { bleLog("[WIFI] Connection timeout"); }
     }
   }
 }
 
 void reconnectWiFi() {
-  Serial.println("[WIFI] Reconnecting...");
+  logDebug("[WIFI] ", "Reconnecting...");
   delay(WIFI_RECONNECT_INTERVAL);
   String ssid = getWifiSsid();
   String pass = getWifiPass();
@@ -248,6 +254,7 @@ void sendDataToServer(const uint8_t* data, size_t len) {
   BoardResponse resp;
   httpBoardMessage(serverHost, serverPort, output, resp);
   lastServerMessage = millis();
+  logDebug("[DATA] ", "Sent " + String(len) + " bytes to server (B_TO_C)");
 }
 
 void sendLog(const String& level, const String& message) {
@@ -266,6 +273,11 @@ void sendLog(const String& level, const String& message) {
   BoardResponse resp;
   httpBoardMessage(serverHost, serverPort, output, resp);
   lastServerMessage = millis();
+}
+
+void logDebug(const String& prefix, const String& message) {
+  Serial.print(prefix); Serial.println(message);
+  sendLog("debug", prefix + message);
 }
 
 void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {
