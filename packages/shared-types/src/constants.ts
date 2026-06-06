@@ -3,6 +3,7 @@ export const MESSAGE_VERSION = '1.0';
 export const WEBSOCKET_PATHS = {
   BOARD: '/ws/board',
   CLIENT: '/ws/client',
+  MONITOR: '/ws/monitor',
 } as const;
 
 export const BLE_UUID = {

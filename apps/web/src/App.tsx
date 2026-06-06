@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import BoardConsole from './BoardConsole';
 
 const API_BASE = 'http://localhost:10008/api';
 
@@ -30,15 +31,6 @@ interface User {
   createdAt: string;
 }
 
-interface Session {
-  id: string;
-  boardId: string;
-  clientId: string;
-  assignedAt: string;
-  expiresAt: string;
-  status: string;
-}
-
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
@@ -48,6 +40,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [tab, setTab] = useState<'boards' | 'users'>('boards');
+  const [consoleBoard, setConsoleBoard] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -137,6 +130,9 @@ function App() {
   }
 
   return (
+    <>
+      {consoleBoard && <BoardConsole boardId={consoleBoard} onClose={() => setConsoleBoard(null)} />}
+      {!consoleBoard && (
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: 20, fontFamily: 'system-ui' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <h1 style={{ margin: 0 }}>Nexio Dashboard</h1>
@@ -204,6 +200,12 @@ function App() {
                             }}
                           >
                             Discard
+                          </button>
+                          <button
+                            style={{ ...buttonStyle, background: '#3b82f6', marginLeft: 4 }}
+                            onClick={() => setConsoleBoard(board.uniqueId)}
+                          >
+                            Console
                           </button>
                         </td>
                       </tr>
@@ -320,6 +322,8 @@ function App() {
           </div>
         )}
       </div>
+      )}
+    </>
   );
 }
 

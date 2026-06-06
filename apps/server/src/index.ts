@@ -17,6 +17,8 @@ const boardConnections = new Map<string, WebSocket>();
 const clientConnections = new Map<string, WebSocket>();
 const heartbeatTimers = new Map<string, NodeJS.Timeout>();
 const boardCommandQueues = new Map<string, any[]>();
+const monitorConnections = new Map<string, WebSocket>();
+const boardLogs = new Map<string, any[]>();
 
 const prisma = new PrismaClient();
 
@@ -34,6 +36,13 @@ function sendToBoard(boardId: string, cmd: any) {
   queueBoardCommand(boardId, cmd);
 }
 
+function broadcastToMonitors(event: any) {
+  const msg = JSON.stringify(event);
+  monitorConnections.forEach((ws) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  });
+}
+
 async function start() {
   const fastify = Fastify({ logger: true });
 
@@ -46,6 +55,15 @@ async function start() {
       orderBy: { connectedAt: 'desc' },
     });
     return boards;
+  });
+
+  fastify.get('/api/boards/:id', async (request: any, reply: any) => {
+    const board = await prisma.board.findUnique({ where: { uniqueId: request.params.id } });
+    if (!board) {
+      return reply.status(404).send({ error: 'Board not found' });
+    }
+    const logs = boardLogs.get(board.uniqueId) || [];
+    return { board, logs, connected: boardConnections.has(board.uniqueId) };
   });
 
   fastify.get('/api/boards/idle', async () => {
@@ -370,12 +388,28 @@ async function start() {
         if (client) {
           const clientWs = clientConnections.get(client.clientId);
           if (clientWs && clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({
+            const relayMsg = {
               type: 'DATA_RELAY', version: MESSAGE_VERSION, timestamp: Date.now(),
               sessionId, sourceId: macAddr || id, direction, payload,
-            }));
+            };
+            clientWs.send(JSON.stringify(relayMsg));
+            broadcastToMonitors({ boardId: boardUniqueId, ...relayMsg });
           }
         }
+      }
+      return { commands };
+    }
+
+    if (type === 'LOG') {
+      const boardUniqueId = id || sourceId;
+      if (boardUniqueId) {
+        resetHeartbeatTimer(boardUniqueId);
+        const entry = { timestamp: Date.now(), level: msg.level || 'info', message: msg.message, data: msg.data };
+        const logs = boardLogs.get(boardUniqueId) || [];
+        logs.push(entry);
+        if (logs.length > 500) logs.shift();
+        boardLogs.set(boardUniqueId, logs);
+        broadcastToMonitors({ boardId: boardUniqueId, type: 'LOG', ...entry });
       }
       return { commands };
     }
@@ -462,6 +496,7 @@ async function start() {
 
   const wss = new WebSocketServer({ noServer: true });
   const clientWss = new WebSocketServer({ noServer: true });
+  const monitorWss = new WebSocketServer({ noServer: true });
 
   fastify.server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url || '', `http://${request.headers.host || 'localhost'}`);
@@ -472,6 +507,10 @@ async function start() {
     } else if (url.pathname === WEBSOCKET_PATHS.CLIENT) {
       clientWss.handleUpgrade(request, socket, head, (ws) => {
         clientWss.emit('connection', ws, request);
+      });
+    } else if (url.pathname === WEBSOCKET_PATHS.MONITOR) {
+      monitorWss.handleUpgrade(request, socket, head, (ws) => {
+        monitorWss.emit('connection', ws, request);
       });
     } else {
       socket.destroy();
@@ -533,6 +572,17 @@ async function start() {
         });
       }
     });
+  });
+
+  monitorWss.on('connection', (ws, req) => {
+    const monitorId = crypto.randomUUID();
+    monitorConnections.set(monitorId, ws);
+    debugLog(`Monitor WS connected from ${req.socket.remoteAddress}`);
+    ws.on('close', () => {
+      monitorConnections.delete(monitorId);
+      debugLog('Monitor WS disconnected');
+    });
+    ws.on('error', (err) => debugLog(`Monitor WS error: ${err}`));
   });
 
   await fastify.listen({ port: PORT, host: '0.0.0.0' });
@@ -665,8 +715,22 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
             direction,
             payload,
           }));
+          broadcastToMonitors({ boardId: boardUniqueId, type: 'DATA_RELAY', sessionId, sourceId: msg.uniqueId || boardId, direction, payload });
         }
       }
+    }
+  }
+
+  if (type === 'LOG') {
+    const boardUniqueId = id || boardId;
+    if (boardUniqueId) {
+      resetHeartbeatTimer(boardUniqueId);
+      const entry = { timestamp: Date.now(), level: msg.level || 'info', message: msg.message, data: msg.data };
+      const logs = boardLogs.get(boardUniqueId) || [];
+      logs.push(entry);
+      if (logs.length > 500) logs.shift();
+      boardLogs.set(boardUniqueId, logs);
+      broadcastToMonitors({ boardId: boardUniqueId, type: 'LOG', ...entry });
     }
   }
   } catch (err) {

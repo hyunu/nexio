@@ -113,6 +113,16 @@ void setBleUniqueId(const String& id) {
   bleUniqueId = id;
 }
 
+void bleLog(const String& msg) {
+  if (pTxCharacteristic == nullptr || pServer == nullptr) return;
+  int connCount = pServer->getConnectedCount();
+  if (connCount == 0) return;
+  NimBLE2904* desc = (NimBLE2904*)pTxCharacteristic->getDescriptorByUUID(NimBLEUUID((uint16_t)0x2904));
+  pTxCharacteristic->setValue(msg);
+  pTxCharacteristic->notify();
+  Serial.print("[BLE_TX] "); Serial.println(msg);
+}
+
 void updateAdvertising() {
   if (pServer == nullptr) return;
   NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();

@@ -32,6 +32,7 @@ void setup() {
   Serial.println("[BOOT] Nexio firmware starting...");
 
   if (loadConfig()) {
+    bleLog("[BOOT] Config loaded");
     uniqueId = getUniqueId();
     setBleUniqueId(uniqueId);
     onboarded = true;
@@ -50,6 +51,7 @@ void setup() {
     bleStatusFlags = 0;
     Serial.println("[BOOT] No config, starting BLE advertising...");
     startBLEAdvertising();
+    bleLog("[BOOT] BLE advertising started");
   }
 }
 
@@ -63,6 +65,7 @@ void loop() {
     wifiConnected = true;
     currentSsid = WiFi.SSID();
     Serial.print("[LOOP] WiFi connected to "); Serial.println(currentSsid);
+    bleLog("[WIFI] Connected to " + currentSsid + ", IP: " + WiFi.localIP().toString());
     delay(1000);
     registered = false;
     lastServerMessage = 0;
@@ -97,10 +100,13 @@ void loop() {
         uniqueId = resp.uniqueId;
         setBleUniqueId(uniqueId);
         updateStatusFlags();
+        bleLog("[SVR] Registered as " + uniqueId);
       }
       registered = true;
+      sendLog("info", "Board registered with server as " + uniqueId);
     } else {
       Serial.println(" FAILED");
+      bleLog("[SVR] Register FAILED, retrying...");
     }
   }
 
@@ -203,12 +209,14 @@ void connectWiFi() {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.print("[WIFI] Connected, IP: ");
       Serial.println(WiFi.localIP());
+      bleLog("[WIFI] Connected, IP: " + WiFi.localIP().toString());
       delay(500);
     } else {
       Serial.print("[WIFI] Failed, status=");
       Serial.println(WiFi.status());
-      if (WiFi.status() == WL_NO_SSID_AVAIL) Serial.println("[WIFI] Network not found");
-      else if (WiFi.status() == WL_CONNECT_FAILED) Serial.println("[WIFI] Wrong password");
+      if (WiFi.status() == WL_NO_SSID_AVAIL) { bleLog("[WIFI] Network not found"); Serial.println("[WIFI] Network not found"); }
+      else if (WiFi.status() == WL_CONNECT_FAILED) { bleLog("[WIFI] Wrong password"); Serial.println("[WIFI] Wrong password"); }
+      else { bleLog("[WIFI] Connection timeout"); }
     }
   }
 }
@@ -242,10 +250,29 @@ void sendDataToServer(const uint8_t* data, size_t len) {
   lastServerMessage = millis();
 }
 
+void sendLog(const String& level, const String& message) {
+  if (!registered || uniqueId.length() == 0 || serverHost.length() == 0) return;
+
+  JsonDocument doc;
+  doc["type"] = "LOG";
+  doc["version"] = MESSAGE_VERSION;
+  doc["timestamp"] = millis();
+  doc["id"] = uniqueId;
+  doc["level"] = level;
+  doc["message"] = message;
+
+  String output;
+  serializeJson(doc, output);
+  BoardResponse resp;
+  httpBoardMessage(serverHost, serverPort, output, resp);
+  lastServerMessage = millis();
+}
+
 void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {
   Serial.println("[CFG] WiFi config received via BLE");
   Serial.print("[CFG] SSID: "); Serial.println(ssid);
   Serial.print("[CFG] Server: "); Serial.println(url);
+  bleLog("[CFG] Config received: " + ssid);
   if (boardUniqueId.length() > 0) {
     uniqueId = boardUniqueId;
     setBleUniqueId(uniqueId);
