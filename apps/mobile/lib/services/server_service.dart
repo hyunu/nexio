@@ -48,6 +48,24 @@ class ServerService {
     }
   }
 
+  Future<Map<String, dynamic>> discardByMac(String macAddress) async {
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 5);
+      final request = await client.postUrl(
+        Uri.parse('$baseUrl/api/boards/discard-by-mac'),
+      );
+      request.headers.contentType = ContentType.json;
+      request.write(jsonEncode({'macAddress': macAddress}));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      client.close();
+      return jsonDecode(body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'error': e.toString()};
+    }
+  }
+
   Future<Map<String, dynamic>> waitForOnboarding({
     required String macAddress,
     Duration pollInterval = const Duration(seconds: 3),

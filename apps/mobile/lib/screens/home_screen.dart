@@ -104,18 +104,15 @@ class _HomeScreenState extends State<HomeScreen> {
   };
 
   void _onDeviceSelected(ScanResult device) {
-    final state = BleScanner.parseStateFromAdData(device.advertisementData);
-    if (state != NexioDeviceState.connected && state != NexioDeviceState.fullConnected) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ConfigScreen(
-            device: device.device,
-            serverUrl: _savedServerUrl ?? 'ws://192.168.1.100:10008/ws/board',
-          ),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ConfigScreen(
+          device: device.device,
+          serverUrl: _savedServerUrl ?? 'http://192.168.0.9:10008',
         ),
-      );
-    }
+      ),
+    );
   }
 
   @override
@@ -178,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       );
                       final color = _stateColors[state] ?? Colors.grey;
                       final label = _stateLabels[state] ?? '';
-                      final canTap = state == NexioDeviceState.unconfigured || state == NexioDeviceState.configuring || state == NexioDeviceState.wifiOnly;
+                      final canTap = true;
                       return ListTile(
                         leading: CircleAvatar(
                           backgroundColor: color,

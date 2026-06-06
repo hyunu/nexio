@@ -13,7 +13,7 @@ export type BoardStatus = 'IDLE' | 'BUSY' | 'OFFLINE' | 'CLAIMED' | 'DISCARDED';
 export type ClientStatus = 'CONNECTED' | 'DISCONNECTED';
 export type SessionStatus = 'ACTIVE' | 'EXPIRED' | 'TERMINATED';
 export type DataDirection = 'B_TO_C' | 'C_TO_B';
-export type ControlAction = 'RESET' | 'DISCONNECT' | 'PING' | 'FACTORY_RESET';
+export type ControlAction = 'RESET' | 'DISCONNECT' | 'PING' | 'DISCARD';
 
 export interface BaseMessage {
   type: MessageType;

@@ -18,11 +18,12 @@ services:
 
   server:
     build:
-      context: ./apps/server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/server/Dockerfile
     ports:
       - "10008:10008"
     environment:
+      - DATABASE_URL=mysql://root:qwer1234@mysql:3306/nexio_db
       - DB_HOST=mysql
       - DB_PORT=3306
       - DB_USER=root

@@ -18,6 +18,8 @@ model Board {
   updatedAt    DateTime  @updatedAt
   sessions     Session[]
   wsConnection String?
+  location     String?
+  productConnected Boolean @default(false)
 }
 
 model User {

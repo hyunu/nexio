@@ -25,6 +25,9 @@ class BleScanner {
       StreamController<List<ScanResult>>.broadcast();
   StreamSubscription<List<ScanResult>>? _fbpSubscription;
 
+  List<BluetoothService>? _cachedServices;
+  Future<List<BluetoothService>>? _discoveryInProgress;
+
   Stream<List<ScanResult>> get scanResults => _scanController.stream;
 
   static NexioDeviceState parseStateFromAdData(AdvertisementData data) {
@@ -52,6 +55,20 @@ class BleScanner {
     return NexioDeviceState.wifiOnly;
   }
 
+  Future<List<BluetoothService>> discoverServices(BluetoothDevice device) async {
+    if (_cachedServices != null) return _cachedServices!;
+    if (_discoveryInProgress != null) return _discoveryInProgress!;
+    _discoveryInProgress = device.discoverServices();
+    _cachedServices = await _discoveryInProgress;
+    _discoveryInProgress = null;
+    return _cachedServices!;
+  }
+
+  void clearCache() {
+    _cachedServices = null;
+    _discoveryInProgress = null;
+  }
+
   Future<void> startScan({Duration timeout = const Duration(seconds: 10)}) async {
     _fbpSubscription?.cancel();
 
@@ -70,12 +87,32 @@ class BleScanner {
     await FlutterBluePlus.stopScan();
   }
 
+  Future<bool> sendCommand(BluetoothDevice device, String action) async {
+    try {
+      final services = await discoverServices(device);
+      for (var service in services) {
+        if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.str.toLowerCase() == _charWriteUuid.toLowerCase()) {
+              String jsonString = '{"action":"$action"}';
+              await characteristic.write(jsonString.codeUnits);
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   Future<bool> sendConfig(
     BluetoothDevice device,
     Map<String, String> config,
   ) async {
     try {
-      List<BluetoothService> services = await device.discoverServices();
+      final services = await discoverServices(device);
 
       for (var service in services) {
         if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
@@ -97,7 +134,7 @@ class BleScanner {
   }
 
   Stream<String> subscribeToLogs(BluetoothDevice device) async* {
-    List<BluetoothService> services = await device.discoverServices();
+    final services = await discoverServices(device);
     for (var service in services) {
       if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
         for (var characteristic in service.characteristics) {

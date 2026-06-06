@@ -20,8 +20,11 @@ String receivedSsid = "";
 String receivedPass = "";
 String receivedUrl = "";
 String receivedUniqueId = "";
+String blePendingAction = "";
+static String bleLastProcessedValue = "";
 
 extern void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& uniqueId);
+void bleLog(const String& msg);
 
 class ServerCallbacks: public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer) {
@@ -52,6 +55,15 @@ class RxCallbacks: public NimBLECharacteristicCallbacks {
         return;
       }
 
+      if (doc.containsKey("action")) {
+        String action = doc["action"].as<String>();
+        Serial.print("[BLE_RX] Command received: "); Serial.println(action);
+        bleLog(String("[CMD] ") + action);
+        blePendingAction = action;
+        bleDataProcessed = true;
+        return;
+      }
+
       if (doc.containsKey("ssid")) {
         receivedSsid = doc["ssid"].as<String>();
         Serial.print("[BLE_RX] ssid: "); Serial.println(receivedSsid);
@@ -71,6 +83,7 @@ class RxCallbacks: public NimBLECharacteristicCallbacks {
 
       if (receivedSsid.length() > 0 && receivedPass.length() > 0 && receivedUrl.length() > 0) {
         Serial.println("[BLE_RX] All fields received, calling onWiFiConfigured");
+        bleDataProcessed = true;
         onWiFiConfigured(receivedSsid, receivedPass, receivedUrl, receivedUniqueId);
         receivedSsid = "";
         receivedPass = "";
@@ -195,16 +208,25 @@ void handleBLE() {
   if (connCount > 0 && !bleConnected) {
     bleConnected = true;
     bleDataProcessed = false;
+    bleAdvertisingActive = false;
+    bleLastProcessedValue = "";
     Serial.println("[BLE] Client connected");
   } else if (connCount == 0 && bleConnected) {
     bleConnected = false;
     Serial.println("[BLE] Client disconnected");
+    bleDataProcessed = false;
+    bleLastProcessedValue = "";
+    if (!bleAdvertisingActive) {
+      startBLEAdvertising();
+    }
   }
 
-  if (pRxCharacteristic != nullptr && bleConnected && !bleDataProcessed) {
+  if (pRxCharacteristic != nullptr && bleConnected) {
     std::string value = pRxCharacteristic->getValue();
     if (value.length() > 0) {
       String data = String(value.c_str());
+      if (data == bleLastProcessedValue) return;
+
       Serial.println("[BLE_RX] Data received!");
       Serial.print("[BLE_RX] Raw: "); Serial.println(data);
 
@@ -214,6 +236,16 @@ void handleBLE() {
       if (error) {
         Serial.print("[BLE_RX] JSON parse error: ");
         Serial.println(error.c_str());
+        return;
+      }
+
+      bleLastProcessedValue = data;
+
+      if (doc.containsKey("action")) {
+        String action = doc["action"].as<String>();
+        Serial.print("[BLE_RX] Command received: "); Serial.println(action);
+        bleLog(String("[CMD] ") + action);
+        blePendingAction = action;
         return;
       }
 
@@ -236,7 +268,6 @@ void handleBLE() {
 
       if (receivedSsid.length() > 0 && receivedPass.length() > 0 && receivedUrl.length() > 0) {
         Serial.println("[BLE_RX] All fields received, calling onWiFiConfigured");
-        bleDataProcessed = true;
         onWiFiConfigured(receivedSsid, receivedPass, receivedUrl, receivedUniqueId);
         receivedSsid = "";
         receivedPass = "";

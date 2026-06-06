@@ -38,6 +38,8 @@
 #define DISPLAY_MOSI_PIN 7
 #define DISPLAY_MISO_PIN 8
 
+#define STATUS_LED_PIN 8
+
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
 

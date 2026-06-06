@@ -5,10 +5,11 @@
 
 #include "src/config.h"
 #include "src/base64.hpp"
-#include "src/ble.hpp"
 #include "src/wifi.hpp"
+#include "src/ble.hpp"
 #include "src/uart.hpp"
 #include "src/http_board.hpp"
+#include "src/ws_board.hpp"
 
 
 String uniqueId = "";
@@ -23,10 +24,35 @@ bool registered = false;
 unsigned long lastServerMessage = 0;
 unsigned long lastRegisterAttempt = 0;
 
+unsigned long lastLedToggle = 0;
+bool ledState = false;
+
 bool rfidConnected = false;
 bool lastProductConnected = false;
 
+BoardWebSocket ws;
+String wsLastMessage = "";
+bool wsMessageReceived = false;
+
 void updateStatusFlags();
+void processWsMessage(const String& msg);
+
+void onWsMessage(const String& msg) {
+  wsLastMessage = msg;
+  wsMessageReceived = true;
+}
+
+void onWsConnected() {
+  Serial.println("[WS] Connected to server");
+  bleLog("[WS] Connected");
+  registered = false;
+  lastRegisterAttempt = 0;
+}
+
+void onWsDisconnected() {
+  Serial.println("[WS] Disconnected");
+  bleLog("[WS] Disconnected");
+}
 
 void setup() {
   Serial.begin(115200);
@@ -34,13 +60,17 @@ void setup() {
   Serial.println();
   Serial.println("[BOOT] Nexio firmware starting...");
 
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);
+
+  initBLE();
+
   if (loadConfig()) {
     bleLog("[BOOT] Config loaded");
     uniqueId = getUniqueId();
     setBleUniqueId(uniqueId);
     onboarded = true;
     initUART();
-    logDebug("[BOOT] ", "Config loaded, uniqueId=" + uniqueId + ", connecting WiFi...");
 
     String serverUrl = getServerUrl();
     int protocolStart = serverUrl.indexOf("://");
@@ -48,13 +78,74 @@ void setup() {
     serverHost = serverUrl.substring(protocolStart + 3, portStart);
     serverPort = serverUrl.substring(portStart + 1).toInt();
 
+    ws.begin(serverHost, serverPort);
+    ws.onMessage(onWsMessage);
+    ws.onConnected(onWsConnected);
+    ws.onDisconnected(onWsDisconnected);
+
     connectWiFi();
   } else {
-    initBLE();
     bleStatusFlags = 0;
-    Serial.println("[BOOT] No config, starting BLE advertising...");
-    startBLEAdvertising();
-    bleLog("[BOOT] BLE advertising started");
+  }
+
+  Serial.println("[BOOT] Starting BLE advertising...");
+  startBLEAdvertising();
+  bleLog("[BOOT] BLE advertising started");
+}
+
+void sendDiscardAck() {
+  StaticJsonDocument<128> ackDoc;
+  ackDoc["type"] = "DISCARD_ACK";
+  ackDoc["version"] = MESSAGE_VERSION;
+  ackDoc["timestamp"] = millis();
+  if (uniqueId.length() > 0) ackDoc["id"] = uniqueId;
+  char output[256];
+  serializeJson(ackDoc, output, sizeof(output));
+  if (ws.isConnected()) {
+    ws.send(output, strlen(output));
+  } else {
+    BoardResponse ackResp;
+    httpBoardMessage(serverHost, serverPort, String(output), ackResp);
+  }
+}
+
+void processWsMessage(const String& msg) {
+  StaticJsonDocument<768> doc;
+  DeserializationError err = deserializeJson(doc, msg);
+  if (err) return;
+
+  const char* type = doc["type"];
+
+  if (strcmp(type, "ASSIGN_ID") == 0) {
+    const char* newId = doc["uniqueId"];
+    if (strlen(newId) > 0 && strcmp(newId, uniqueId.c_str()) != 0) {
+      uniqueId = newId;
+      setBleUniqueId(uniqueId);
+      updateStatusFlags();
+    }
+    if (!registered) {
+      registered = true;
+      bleLog("[SVR] Registered");
+    }
+  } else if (strcmp(type, "HEARTBEAT") == 0) {
+    lastServerMessage = millis();
+  } else if (strcmp(type, "CONTROL") == 0) {
+    const char* action = doc["action"];
+    if (strcmp(action, "RESET") == 0) {
+      ESP.restart();
+    } else if (strcmp(action, "DISCARD") == 0) {
+      sendDiscardAck();
+      delay(100);
+      clearConfig();
+      delay(100);
+      ESP.restart();
+    } else if (strcmp(action, "DISCONNECT") == 0) {
+    }
+  } else if (strcmp(type, "DATA_RELAY") == 0) {
+    const char* payload = doc["payload"];
+    std::vector<uint8_t> binaryData = base64_decode(std::string(payload));
+    Serial1.write(binaryData.data(), binaryData.size());
+  } else if (strcmp(type, "BOARD_READY") == 0) {
   }
 }
 
@@ -67,49 +158,64 @@ void loop() {
   if (wifiState && !wifiConnected) {
     wifiConnected = true;
     currentSsid = WiFi.SSID();
-    logDebug("[LOOP] ", "WiFi connected to " + currentSsid);
-    bleLog("[WIFI] Connected to " + currentSsid + ", IP: " + WiFi.localIP().toString());
     delay(1000);
     registered = false;
     lastServerMessage = 0;
+    if (serverHost.length() > 0) {
+      ws.begin(serverHost, serverPort);
+      ws.onMessage(onWsMessage);
+      ws.onConnected(onWsConnected);
+      ws.onDisconnected(onWsDisconnected);
+    }
   } else if (!wifiState && wifiConnected) {
     wifiConnected = false;
     productConnected = false;
     registered = false;
-    logDebug("[LOOP] ", "WiFi disconnected, reconnecting...");
+    ws.disconnect();
     reconnectWiFi();
+  }
+
+  ws.loop();
+
+  if (wsMessageReceived) {
+    wsMessageReceived = false;
+    processWsMessage(wsLastMessage);
   }
 
   if (wifiConnected && !registered && serverHost.length() > 0 && millis() - lastRegisterAttempt > 3000) {
     lastRegisterAttempt = millis();
-    JsonDocument doc;
-    doc["type"] = "REGISTER";
-    doc["version"] = MESSAGE_VERSION;
-    doc["timestamp"] = millis();
-    doc["boardId"] = WiFi.macAddress();
-    doc["firmwareVersion"] = "1.0.0";
-    doc["displayAvailable"] = false;
-    if (uniqueId.length() > 0) doc["uniqueId"] = uniqueId;
 
-    String output;
-    serializeJson(doc, output);
+    char boardId[18];
+    strncpy(boardId, WiFi.macAddress().c_str(), sizeof(boardId) - 1);
+    boardId[sizeof(boardId) - 1] = '\0';
+    unsigned long ts = millis();
 
-    Serial.print("[HTTP] Sending REGISTER...");
-    BoardResponse resp;
-    if (httpBoardMessage(serverHost, serverPort, output, resp)) {
-      logDebug("[HTTP] ", "REGISTER OK");
-      if (resp.hasAssignId && resp.uniqueId.length() > 0) {
-        logDebug("[HTTP] ", "ASSIGN_ID: " + resp.uniqueId);
-        uniqueId = resp.uniqueId;
-        setBleUniqueId(uniqueId);
-        updateStatusFlags();
-        bleLog("[SVR] Registered as " + uniqueId);
-      }
-      registered = true;
-      sendLog("info", "Board registered with server as " + uniqueId);
+    char output[512];
+    int pos = snprintf(output, sizeof(output),
+      "{\"type\":\"REGISTER\",\"version\":\"%s\",\"timestamp\":%lu,\"boardId\":\"%s\","
+      "\"firmwareVersion\":\"1.0.0\",\"displayAvailable\":false,\"productConnected\":%s",
+      MESSAGE_VERSION, ts, boardId,
+      productConnected ? "true" : "false");
+    if (uniqueId.length() > 0) {
+      pos += snprintf(output + pos, sizeof(output) - pos, ",\"uniqueId\":\"%s\"", uniqueId.c_str());
+    }
+    pos += snprintf(output + pos, sizeof(output) - pos, "}");
+
+    if (ws.isConnected()) {
+      ws.send(output, strlen(output));
     } else {
-      logDebug("[HTTP] ", "REGISTER FAILED");
-      bleLog("[SVR] Register FAILED, retrying...");
+      BoardResponse resp;
+      if (httpBoardMessage(serverHost, serverPort, String(output), resp)) {
+        if (resp.hasAssignId && resp.uniqueId.length() > 0) {
+          uniqueId = resp.uniqueId;
+          setBleUniqueId(uniqueId);
+          updateStatusFlags();
+          bleLog("[SVR] Registered as " + uniqueId);
+        }
+        registered = true;
+      } else {
+        bleLog("[SVR] Register FAILED, retrying...");
+      }
     }
   }
 
@@ -117,47 +223,35 @@ void loop() {
     if (millis() - lastServerMessage > HEARTBEAT_INTERVAL) {
       lastServerMessage = millis();
 
-      JsonDocument doc;
-      doc["type"] = "HEARTBEAT";
-      doc["version"] = MESSAGE_VERSION;
-      doc["timestamp"] = millis();
-      if (uniqueId.length() > 0) doc["id"] = uniqueId;
+      char output[256];
+      snprintf(output, sizeof(output),
+        "{\"type\":\"HEARTBEAT\",\"version\":\"%s\",\"timestamp\":%lu",
+        MESSAGE_VERSION, millis());
+      if (uniqueId.length() > 0) {
+        int len = strlen(output);
+        snprintf(output + len, sizeof(output) - len, ",\"id\":\"%s\"", uniqueId.c_str());
+      }
+      int len = strlen(output);
+      snprintf(output + len, sizeof(output) - len, "}");
 
-      String output;
-      serializeJson(doc, output);
-
-      BoardResponse resp;
-      if (httpBoardMessage(serverHost, serverPort, output, resp)) {
-        if (resp.hasControl) {
-          logDebug("[HTTP] ", "CONTROL: " + resp.action);
-          if (resp.action == "RESET") {
-            ESP.restart();
-          } else if (resp.action == "FACTORY_RESET") {
-            clearConfig();
-            ESP.restart();
-          } else if (resp.action == "DISCARD") {
-            logDebug("[HTTP] ", "DISCARD received, sending ACK...");
-            JsonDocument ackDoc;
-            ackDoc["type"] = "DISCARD_ACK";
-            ackDoc["version"] = MESSAGE_VERSION;
-            ackDoc["timestamp"] = millis();
-            if (uniqueId.length() > 0) ackDoc["id"] = uniqueId;
-            String ackOutput;
-            serializeJson(ackDoc, ackOutput);
-            BoardResponse ackResp;
-            httpBoardMessage(serverHost, serverPort, ackOutput, ackResp);
-            logDebug("[HTTP] ", "DISCARD_ACK sent, clearing config and restarting");
-            clearConfig();
-            ESP.restart();
-          } else if (resp.action == "DISCONNECT") {
-            logDebug("[HTTP] ", "DISCONNECT received");
+      if (ws.isConnected()) {
+        ws.send(output, strlen(output));
+      } else {
+        BoardResponse resp;
+        if (httpBoardMessage(serverHost, serverPort, String(output), resp)) {
+          if (resp.hasControl) {
+            if (resp.action == "RESET") {
+              ESP.restart();
+            } else if (resp.action == "DISCARD") {
+              sendDiscardAck();
+              clearConfig();
+              ESP.restart();
+            }
           }
-        }
-        if (resp.hasDataRelay) {
-          String base64Data = resp.payload;
-          std::vector<uint8_t> binaryData = base64_decode(std::string(base64Data.c_str()));
-          Serial1.write(binaryData.data(), binaryData.size());
-          logDebug("[HTTP] ", "Data relay C_TO_B: " + String(binaryData.size()) + " bytes");
+          if (resp.hasDataRelay) {
+            std::vector<uint8_t> binaryData = base64_decode(std::string(resp.payload.c_str()));
+            Serial1.write(binaryData.data(), binaryData.size());
+          }
         }
       }
     }
@@ -169,22 +263,26 @@ void loop() {
   }
   if (productConnected != lastProductConnected) {
     lastProductConnected = productConnected;
-    logDebug("[UART] ", productConnected ? "Product connected" : "Product disconnected");
   }
 
   updateStatusFlags();
+  updateStatusLED();
 
-  if (onboarded && wifiConnected && registered && !isBleAdvertising()) {
-  } else if (onboarded && (!wifiConnected || !registered)) {
-    if (!isBleAdvertising()) {
-      if (pServer == nullptr) {
-        bleStatusFlags = 0;
-        initBLE();
-        startBLEAdvertising();
-      } else {
-        resumeBLE();
-      }
+  if (blePendingAction.length() > 0) {
+    String action = blePendingAction;
+    blePendingAction = "";
+    if (action == "DISCARD") {
+      clearConfig();
+      delay(100);
+      ESP.restart();
+    } else if (action == "RESET") {
+      delay(100);
+      ESP.restart();
     }
+  }
+
+  if (!isBleConnected() && !isBleAdvertising()) {
+    startBLEAdvertising();
   }
 }
 
@@ -195,6 +293,24 @@ void updateStatusFlags() {
   if (wifiConnected)    flags |= STATUS_FLAG_WIFI;
   if (onboarded)        flags |= STATUS_FLAG_CFG;
   setBleStatus(flags);
+}
+
+void updateStatusLED() {
+  unsigned long interval;
+  if (productConnected) {
+    digitalWrite(STATUS_LED_PIN, LOW);
+    return;
+  } else if (registered) {
+    interval = 1000;
+  } else {
+    interval = 200;
+  }
+  unsigned long now = millis();
+  if (now - lastLedToggle >= interval) {
+    lastLedToggle = now;
+    ledState = !ledState;
+    digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
+  }
 }
 
 void connectWiFi() {
@@ -216,10 +332,8 @@ void connectWiFi() {
     }
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
-      logDebug("[WIFI] ", "Connected, IP: " + WiFi.localIP().toString());
       delay(500);
     } else {
-      logDebug("[WIFI] ", "Failed, status=" + String(WiFi.status()));
       if (WiFi.status() == WL_NO_SSID_AVAIL) { bleLog("[WIFI] Network not found"); }
       else if (WiFi.status() == WL_CONNECT_FAILED) { bleLog("[WIFI] Wrong password"); }
       else { bleLog("[WIFI] Connection timeout"); }
@@ -228,7 +342,6 @@ void connectWiFi() {
 }
 
 void reconnectWiFi() {
-  logDebug("[WIFI] ", "Reconnecting...");
   delay(WIFI_RECONNECT_INTERVAL);
   String ssid = getWifiSsid();
   String pass = getWifiPass();
@@ -238,46 +351,43 @@ void reconnectWiFi() {
 void sendDataToServer(const uint8_t* data, size_t len) {
   if (!registered || uniqueId.length() == 0 || serverHost.length() == 0) return;
 
-  String base64Data = base64_encode(data, len).c_str();
+  std::string b64 = base64_encode(data, len);
 
-  JsonDocument doc;
-  doc["type"] = "DATA_RELAY";
-  doc["version"] = MESSAGE_VERSION;
-  doc["timestamp"] = millis();
-  doc["sessionId"] = "";
-  doc["sourceId"] = uniqueId;
-  doc["direction"] = "B_TO_C";
-  doc["payload"] = base64Data;
+  char output[1536];
+  snprintf(output, sizeof(output),
+    "{\"type\":\"DATA_RELAY\",\"version\":\"%s\",\"timestamp\":%lu,"
+    "\"sessionId\":\"\",\"sourceId\":\"%s\",\"direction\":\"B_TO_C\","
+    "\"payload\":\"%s\"}",
+    MESSAGE_VERSION, millis(), uniqueId.c_str(), b64.c_str());
 
-  String output;
-  serializeJson(doc, output);
-  BoardResponse resp;
-  httpBoardMessage(serverHost, serverPort, output, resp);
+  if (ws.isConnected()) {
+    ws.send(output, strlen(output));
+  } else {
+    BoardResponse resp;
+    httpBoardMessage(serverHost, serverPort, String(output), resp);
+  }
   lastServerMessage = millis();
-  logDebug("[DATA] ", "Sent " + String(len) + " bytes to server (B_TO_C)");
 }
 
 void sendLog(const String& level, const String& message) {
   if (!registered || uniqueId.length() == 0 || serverHost.length() == 0) return;
 
-  JsonDocument doc;
-  doc["type"] = "LOG";
-  doc["version"] = MESSAGE_VERSION;
-  doc["timestamp"] = millis();
-  doc["id"] = uniqueId;
-  doc["level"] = level;
-  doc["message"] = message;
+  char output[768];
+  snprintf(output, sizeof(output),
+    "{\"type\":\"LOG\",\"version\":\"%s\",\"timestamp\":%lu,\"id\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}",
+    MESSAGE_VERSION, millis(), uniqueId.c_str(), level.c_str(), message.c_str());
 
-  String output;
-  serializeJson(doc, output);
-  BoardResponse resp;
-  httpBoardMessage(serverHost, serverPort, output, resp);
+  if (ws.isConnected()) {
+    ws.send(output, strlen(output));
+  } else {
+    BoardResponse resp;
+    httpBoardMessage(serverHost, serverPort, String(output), resp);
+  }
   lastServerMessage = millis();
 }
 
 void logDebug(const String& prefix, const String& message) {
   Serial.print(prefix); Serial.println(message);
-  sendLog("debug", prefix + message);
 }
 
 void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {

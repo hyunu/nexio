@@ -52,6 +52,7 @@ void clearConfig() {
   preferences.remove(KEY_WIFI_SSID);
   preferences.remove(KEY_WIFI_PASS);
   preferences.remove(KEY_SERVER_URL);
+  preferences.remove(KEY_UNIQUE_ID);
   preferences.end();
 }
 

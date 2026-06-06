@@ -80,7 +80,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
       _logSubscription = logStream.listen((message) {
         if (!mounted) return;
         String level = 'info';
-        String display = message;
         if (message.contains('FAILED') || message.contains('Error') || message.contains('timeout')) {
           level = 'error';
         } else if (message.contains('retrying') || message.contains('not found') || message.contains('Wrong password')) {
@@ -90,7 +89,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
           _bleLogs.add(_LogEntry(
             timestamp: DateTime.now(),
             level: level,
-            message: display.trim(),
+            message: message.trim(),
           ));
         });
       });
@@ -193,6 +192,57 @@ class _ConfigScreenState extends State<ConfigScreen> {
     });
   }
 
+  Future<void> _sendCommand(String action) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm'),
+        content: Text(action == 'RESET'
+            ? 'Reset the board?'
+            : 'Discard will erase all config and restart the board.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(action == 'RESET' ? 'Reset' : 'Discard',
+                style: TextStyle(color: action == 'RESET' ? Colors.orange : Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    setState(() {
+      _statusMessage = 'Sending $action command...';
+    });
+
+    try {
+      final success = await _bleScanner.sendCommand(widget.device, action);
+      if (success) {
+        setState(() {
+          _statusMessage = 'Command sent. Cleaning up server...';
+        });
+
+        if (action == 'DISCARD') {
+          final serverService = ServerService(_serverUrlController.text);
+          await serverService.discardByMac(widget.device.id.id.toUpperCase());
+          widget.device.disconnect();
+          _bleScanner.clearCache();
+          if (mounted) Navigator.pop(context);
+          return;
+        }
+      } else {
+        setState(() {
+          _statusMessage = 'Failed to send command';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Error: $e';
+      });
+    }
+  }
+
   @override
   void dispose() {
     _ssidController.dispose();
@@ -201,6 +251,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _pollTimer?.cancel();
     _logSubscription?.cancel();
     widget.device.disconnect();
+    _bleScanner.clearCache();
     super.dispose();
   }
 
@@ -219,203 +270,244 @@ class _ConfigScreenState extends State<ConfigScreen> {
             Expanded(
               child: SingleChildScrollView(
                 child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Device: ${widget.device.name}',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'MAC: ${widget.device.id.id}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 24),
-              TextFormField(
-                controller: _ssidController,
-                decoration: const InputDecoration(
-                  labelText: 'WiFi SSID',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.wifi),
-                ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter WiFi SSID';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _passwordController,
-                decoration: const InputDecoration(
-                  labelText: 'WiFi Password',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.lock),
-                ),
-                obscureText: true,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter WiFi password';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
-                controller: _serverUrlController,
-                decoration: const InputDecoration(
-                  labelText: 'Server URL',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.cloud),
-                  hintText: 'ws://192.168.1.100:10008/ws/board',
-                ),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter server URL';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 24),
-              if (_statusMessage != null)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _stage == OnboardingStage.completed
-                        ? Colors.green.shade50
-                        : _stage == OnboardingStage.failed
-                            ? Colors.red.shade50
-                            : Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                  key: _formKey,
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (_stage == OnboardingStage.waiting)
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8),
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                      if (_stage == OnboardingStage.completed)
-                        Icon(Icons.check_circle, color: Colors.green.shade600, size: 40),
-                      if (_stage == OnboardingStage.failed)
-                        Icon(Icons.error, color: Colors.red.shade600, size: 40),
-                      if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
-                        const SizedBox(height: 8),
                       Text(
-                        _statusMessage!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: _stage == OnboardingStage.completed
-                              ? Colors.green.shade800
-                              : _stage == OnboardingStage.failed
-                                  ? Colors.red.shade800
-                                  : Colors.blue.shade800,
-                        ),
+                        'Device: ${widget.device.name}',
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                    ),
-                    ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      ),
-      if (showLogPanel) const SizedBox(height: 8),
-      if (showLogPanel)
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade900,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: _bleLogs.isEmpty
-                ? const Center(
-                    child: Text(
-                      'Waiting for board logs...',
-                      style: TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _bleLogs.length,
-                    itemBuilder: (context, index) {
-                      final log = _bleLogs[index];
-                      final time =
-                          '${log.timestamp.hour.toString().padLeft(2, '0')}:'
-                          '${log.timestamp.minute.toString().padLeft(2, '0')}:'
-                          '${log.timestamp.second.toString().padLeft(2, '0')}';
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 1),
-                        child: Text.rich(
-                          TextSpan(
+                      const SizedBox(height: 8),
+                      Text(
+                        'MAC: ${widget.device.id.id}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 24),
+                      TextFormField(
+                        controller: _ssidController,
+                        decoration: const InputDecoration(
+                          labelText: 'WiFi SSID',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.wifi),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter WiFi SSID';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _passwordController,
+                        decoration: const InputDecoration(
+                          labelText: 'WiFi Password',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.lock),
+                        ),
+                        obscureText: true,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter WiFi password';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: _serverUrlController,
+                        decoration: const InputDecoration(
+                          labelText: 'Server URL',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.cloud),
+                          hintText: 'http://192.168.0.9:10008',
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter server URL';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      if (_statusMessage != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _stage == OnboardingStage.completed
+                                ? Colors.green.shade50
+                                : _stage == OnboardingStage.failed
+                                    ? Colors.red.shade50
+                                    : Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
                             children: [
-                              TextSpan(
-                                text: '$time ',
-                                style: const TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
+                              if (_stage == OnboardingStage.waiting)
+                                const Padding(
+                                  padding: EdgeInsets.only(bottom: 8),
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  ),
                                 ),
-                              ),
-                              TextSpan(
-                                text: log.message,
+                              if (_stage == OnboardingStage.completed)
+                                Icon(Icons.check_circle, color: Colors.green.shade600, size: 40),
+                              if (_stage == OnboardingStage.failed)
+                                Icon(Icons.error, color: Colors.red.shade600, size: 40),
+                              if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
+                                const SizedBox(height: 8),
+                              Text(
+                                _statusMessage!,
+                                textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: log.level == 'error'
-                                      ? Colors.red.shade300
-                                      : Colors.green.shade300,
-                                  fontSize: 11,
-                                  fontFamily: 'monospace',
+                                  color: _stage == OnboardingStage.completed
+                                      ? Colors.green.shade800
+                                      : _stage == OnboardingStage.failed
+                                          ? Colors.red.shade800
+                                          : Colors.blue.shade800,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      );
-                    },
+                    ],
                   ),
+                ),
+              ),
+            ),
+            if (showLogPanel) const SizedBox(height: 8),
+            if (showLogPanel)
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade900,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: _bleLogs.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'Waiting for board logs...',
+                            style: TextStyle(color: Colors.grey, fontSize: 12),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _bleLogs.length,
+                          itemBuilder: (context, index) {
+                            final log = _bleLogs[index];
+                            final time =
+                                '${log.timestamp.hour.toString().padLeft(2, '0')}:'
+                                '${log.timestamp.minute.toString().padLeft(2, '0')}:'
+                                '${log.timestamp.second.toString().padLeft(2, '0')}';
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 1),
+                              child: Text.rich(
+                                TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: '$time ',
+                                      style: const TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                    TextSpan(
+                                      text: log.message,
+                                      style: TextStyle(
+                                        color: log.level == 'error'
+                                            ? Colors.red.shade300
+                                            : Colors.green.shade300,
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            if (_stage == OnboardingStage.form)
+              Column(
+                children: [
+                  const Row(
+                    children: [
+                      Expanded(child: Divider()),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        child: Text('Device Controls', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                      ),
+                      Expanded(child: Divider()),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _sendCommand('RESET'),
+                          icon: const Icon(Icons.restart_alt, size: 18),
+                          label: const Text('Reset'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.orange,
+                            side: const BorderSide(color: Colors.orange),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => _sendCommand('DISCARD'),
+                          icon: const Icon(Icons.factory, size: 18),
+                          label: const Text('Discard'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            side: const BorderSide(color: Colors.red),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            if (_stage == OnboardingStage.form || _stage == OnboardingStage.sending)
+              ElevatedButton.icon(
+                onPressed: _isConnecting ? null : _sendConfig,
+                icon: _isConnecting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+                label: Text(_isConnecting ? 'Sending...' : 'Send Configuration'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                ),
+              ),
+            if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.check),
+                label: const Text('Done'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: _stage == OnboardingStage.completed
+                      ? Colors.green
+                      : Colors.red,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+          ],
         ),
       ),
-      const SizedBox(height: 8),
-      if (_stage == OnboardingStage.form || _stage == OnboardingStage.sending)
-        ElevatedButton.icon(
-          onPressed: _isConnecting ? null : _sendConfig,
-          icon: _isConnecting
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.send),
-          label: Text(_isConnecting ? 'Sending...' : 'Send Configuration'),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-          ),
-        ),
-      if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
-        ElevatedButton.icon(
-          onPressed: () => Navigator.pop(context),
-          icon: const Icon(Icons.check),
-          label: const Text('Done'),
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            backgroundColor: _stage == OnboardingStage.completed
-                ? Colors.green
-                : Colors.red,
-            foregroundColor: Colors.white,
-          ),
-        ),
-    ],
-  ),
-  ),
-);
-}
-}
+    );
+  }
 }

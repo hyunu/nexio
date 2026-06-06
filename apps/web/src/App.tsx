@@ -10,6 +10,19 @@ interface Board {
   status: string;
   connectedAt: string;
   updatedAt: string;
+  location?: string;
+  productConnected?: boolean;
+}
+
+interface SessionItem {
+  id: string;
+  boardId: string;
+  clientId: string;
+  assignedAt: string;
+  expiresAt: string;
+  status: string;
+  board: { uniqueId: string };
+  client: { clientId: string };
 }
 
 interface Client {
@@ -31,16 +44,36 @@ interface User {
   createdAt: string;
 }
 
+const statusLabel: Record<string, string> = {
+  IDLE: '대기', BUSY: '사용 중', OFFLINE: '오프라인',
+  CONNECTED: '연결됨', DISCONNECTED: '연결 끊김',
+};
+
+const statusColor: Record<string, string> = {
+  IDLE: '#10b981', BUSY: '#f59e0b', OFFLINE: '#ef4444',
+  CONNECTED: '#10b981', DISCONNECTED: '#ef4444',
+};
+
+const sidebarNav = [
+  { key: 'boards', label: '릴레이 모듈', icon: '◈' },
+  { key: 'sessions', label: '세션', icon: '◈' },
+  { key: 'clients', label: '클라이언트', icon: '◈' },
+  { key: 'users', label: '사용자', icon: '◉' },
+];
+
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [selectedBoard, setSelectedBoard] = useState('');
   const [selectedClient, setSelectedClient] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [tab, setTab] = useState<'boards' | 'users'>('boards');
+  const [tab, setTab] = useState<'boards' | 'sessions' | 'clients' | 'users'>('boards');
   const [consoleBoard, setConsoleBoard] = useState<string | null>(null);
+  const [editingLocation, setEditingLocation] = useState<Record<string, string>>({});
+  const [savingLocation, setSavingLocation] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetchData();
@@ -50,19 +83,16 @@ function App() {
 
   async function fetchData() {
     try {
-      const [boardsRes, clientsRes, usersRes] = await Promise.all([
+      const [boardsRes, clientsRes, usersRes, sessionsRes] = await Promise.all([
         fetch(`${API_BASE}/boards`),
         fetch(`${API_BASE}/clients`),
         fetch(`${API_BASE}/users`),
+        fetch(`${API_BASE}/sessions`),
       ]);
-
-      const boardsData = await boardsRes.json();
-      const clientsData = await clientsRes.json();
-      const usersData = await usersRes.json();
-
-      setBoards(boardsData);
-      setClients(clientsData);
-      setUsers(usersData);
+      setBoards(await boardsRes.json());
+      setClients(await clientsRes.json());
+      setUsers(await usersRes.json());
+      setSessions(await sessionsRes.json());
     } catch (err) {
       console.error('Fetch error:', err);
     }
@@ -70,33 +100,38 @@ function App() {
 
   async function createSession() {
     if (!selectedBoard || !selectedClient) {
-      setMessage('Please select both board and client');
+      setMessage('보드와 클라이언트를 선택하세요');
       return;
     }
-
     setLoading(true);
     try {
       const res = await fetch(`${API_BASE}/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          boardId: selectedBoard,
-          clientId: selectedClient,
-          duration: 3600,
-        }),
+        body: JSON.stringify({ boardId: selectedBoard, clientId: selectedClient, duration: 3600 }),
       });
-
       if (res.ok) {
-        setMessage('Session created successfully');
+        setMessage('세션이 생성되었습니다');
         fetchData();
       } else {
         const err = await res.json();
-        setMessage(`Error: ${err.error}`);
+        setMessage(`오류: ${err.error}`);
       }
-    } catch (err) {
-      setMessage('Failed to create session');
+    } catch {
+      setMessage('세션 생성 실패');
     }
     setLoading(false);
+  }
+
+  async function saveLocation(uniqueId: string) {
+    const loc = editingLocation[uniqueId] ?? '';
+    setSavingLocation(prev => ({ ...prev, [uniqueId]: true }));
+    await fetch(`${API_BASE}/boards/${uniqueId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ location: loc }),
+    }).catch(() => {});
+    setSavingLocation(prev => ({ ...prev, [uniqueId]: false }));
   }
 
   async function sendControl(targetId: string, action: string, type: string) {
@@ -106,26 +141,9 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetId, action, type }),
       });
-      setMessage(`Control ${action} sent`);
-    } catch (err) {
-      setMessage('Failed to send control');
-    }
-  }
-
-  function getStatusColor(status: string): string {
-    switch (status) {
-      case 'IDLE':
-        return '#22c55e';
-      case 'BUSY':
-        return '#f59e0b';
-      case 'OFFLINE':
-        return '#ef4444';
-      case 'CONNECTED':
-        return '#22c55e';
-      case 'DISCONNECTED':
-        return '#ef4444';
-      default:
-        return '#888';
+      setMessage(`제어 명령 전송: ${action}`);
+    } catch {
+      setMessage('제어 명령 전송 실패');
     }
   }
 
@@ -133,211 +151,346 @@ function App() {
     <>
       {consoleBoard && <BoardConsole boardId={consoleBoard} onClose={() => setConsoleBoard(null)} />}
       {!consoleBoard && (
-      <div style={{ maxWidth: 1200, margin: '0 auto', padding: 20, fontFamily: 'system-ui' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h1 style={{ margin: 0 }}>Nexio Dashboard</h1>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              style={tabStyle(tab === 'boards')}
-              onClick={() => setTab('boards')}
-            >
-              Boards
-            </button>
-            <button
-              style={tabStyle(tab === 'users')}
-              onClick={() => setTab('users')}
-            >
-              Users
-            </button>
-          </div>
-        </div>
+        <div style={layoutStyle}>
+          <aside style={sidebarStyle}>
+            <div style={logoStyle}>NEXIO</div>
+            <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {sidebarNav.map(item => (
+                <button
+                  key={item.key}
+                  style={navItemStyle(tab === item.key)}
+                  onClick={() => setTab(item.key as typeof tab)}
+                >
+                  <span style={{ marginRight: 10 }}>{item.icon}</span>
+                  {item.label}
+                  {item.key === 'boards' && <span style={countStyle}>{boards.length}</span>}
+                </button>
+              ))}
+            </nav>
+          </aside>
+          <main style={mainStyle}>
+            <header style={headerStyle}>
+              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 300, color: '#1e293b', letterSpacing: 6 }}>넥시오 대시보드</h1>
+              <span style={{ fontSize: 13, color: '#6b7280' }}>
+                {new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' })}
+              </span>
+            </header>
 
-        {message && (
-          <div style={{
-            padding: 12,
-            background: message.includes('Error') ? '#fee2e2' : '#dcfce7',
-            color: message.includes('Error') ? '#991b1b' : '#166534',
-            borderRadius: 4,
-            marginBottom: 20,
-          }}>
-            {message}
-          </div>
-        )}
-
-        {tab === 'boards' && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-              <div style={cardStyle}>
-                <h2 style={sectionTitleStyle}>Boards ({boards.length})</h2>
-                <table style={tableStyle}>
-                  <thead>
-                    <tr>
-                      <th style={thStyle}>Unique ID</th>
-                      <th style={thStyle}>Status</th>
-                      <th style={thStyle}>Connected</th>
-                      <th style={thStyle}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {boards.map(board => (
-                      <tr key={board.id}>
-                        <td style={tdStyle}>{board.uniqueId}</td>
-                        <td style={tdStyle}>
-                          <span style={{ ...badgeStyle, background: getStatusColor(board.status) }}>
-                            {board.status}
-                          </span>
-                        </td>
-                        <td style={tdStyle}>{new Date(board.connectedAt).toLocaleString()}</td>
-                        <td style={tdStyle}>
-                          <button style={buttonStyle} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>
-                            Reset
-                          </button>
-                          <button
-                            style={{ ...buttonStyle, background: '#6b7280', marginLeft: 4 }}
-                            onClick={async () => {
-                              await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' });
-                              fetchData();
-                            }}
-                          >
-                            Discard
-                          </button>
-                          <button
-                            style={{ ...buttonStyle, background: '#3b82f6', marginLeft: 4 }}
-                            onClick={() => setConsoleBoard(board.uniqueId)}
-                          >
-                            Console
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {boards.length === 0 && (
-                      <tr><td colSpan={4} style={{ ...tdStyle, textAlign: 'center' }}>No boards connected</td></tr>
-                    )}
-                  </tbody>
-                </table>
+            {message && (
+              <div style={{
+                padding: '10px 16px',
+                background: message.includes('오류') ? '#fef2f2' : '#f0fdf4',
+                color: message.includes('오류') ? '#b91c1c' : '#166534',
+                borderRadius: 8,
+                marginBottom: 20,
+                fontSize: 14,
+                borderLeft: `4px solid ${message.includes('오류') ? '#ef4444' : '#10b981'}`,
+              }}>
+                {message}
               </div>
+            )}
 
+            {tab === 'boards' && (
+              <div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                  <div style={cardStyle}>
+                    <div style={cardHeaderStyle}>
+                      <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>릴레이 모듈 ({boards.length})</h2>
+                    </div>
+                    <table style={tableStyle}>
+                      <thead>
+                        <tr>
+                          <th style={thStyle}>고유 ID</th>
+                          <th style={thStyle}>연결상태</th>
+                          <th style={thStyle}>설치장소</th>
+                          <th style={thStyle}>연결 시간</th>
+                          <th style={{ ...thStyle, textAlign: 'right' }}>작업</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {boards.map(board => (
+                          <tr key={board.id} style={rowHoverStyle}>
+                            <td style={tdStyle}>
+                              <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{board.uniqueId}</span>
+                            </td>
+                            <td style={tdStyle}>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                <span style={badgeStyle(board.status === 'OFFLINE' || board.status === 'DISCONNECTED' ? '#9ca3af' : '#22c55e')}>
+                                  서버{board.status === 'OFFLINE' || board.status === 'DISCONNECTED' ? '✗' : '✓'}
+                                </span>
+                                <span style={badgeStyle(board.productConnected ? '#22c55e' : '#9ca3af')}>
+                                  제품{board.productConnected ? '✓' : '✗'}
+                                </span>
+                              </div>
+                            </td>
+                            <td style={tdStyle}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <input
+                                  style={{
+                                    border: 'none',
+                                    borderBottom: '1px solid #e5e7eb',
+                                    padding: '2px 4px',
+                                    fontSize: 13,
+                                    width: 120,
+                                    outline: 'none',
+                                    background: 'transparent',
+                                    color: '#374151',
+                                  }}
+                                  placeholder="설치장소 입력"
+                                  value={editingLocation[board.uniqueId] ?? board.location ?? ''}
+                                  onChange={e => setEditingLocation(prev => ({ ...prev, [board.uniqueId]: e.target.value }))}
+                                  onBlur={() => saveLocation(board.uniqueId)}
+                                  onKeyDown={e => { if (e.key === 'Enter') saveLocation(board.uniqueId); }}
+                                />
+                                {savingLocation[board.uniqueId] && <span style={{ fontSize: 11, color: '#9ca3af' }}>저장 중...</span>}
+                              </div>
+                            </td>
+                            <td style={{ ...tdStyle, color: '#6b7280' }}>
+                              {new Date(board.connectedAt).toLocaleString()}
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: 'right' }}>
+                              <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+                                <button style={btnStyle('#f59e0b')} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>재시작</button>
+                                <button style={btnStyle('#ef4444')} onClick={async () => { await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' }); fetchData(); }}>공장 초기화</button>
+                                <button style={btnStyle('#3b82f6')} onClick={() => setConsoleBoard(board.uniqueId)}>콘솔</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {boards.length === 0 && (
+                          <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>연결된 릴레이 모듈이 없습니다</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === 'sessions' && (
+              <>
+                <div style={cardStyle}>
+                  <div style={cardHeaderStyle}>
+                    <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>세션 생성</h2>
+                  </div>
+                  <div style={{ padding: 16, display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <select style={selectStyle} value={selectedBoard} onChange={(e) => setSelectedBoard(e.target.value)}>
+                      <option value="">릴레이 모듈 선택</option>
+                      {boards.filter(b => b.status === 'IDLE').map(board => (
+                        <option key={board.id} value={board.uniqueId}>{board.uniqueId}</option>
+                      ))}
+                    </select>
+                    <select style={selectStyle} value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
+                      <option value="">클라이언트 선택</option>
+                      {clients.map(client => (
+                        <option key={client.id} value={client.clientId}>{client.clientId}</option>
+                      ))}
+                    </select>
+                    <button style={primaryBtnStyle} onClick={createSession} disabled={loading || !selectedBoard || !selectedClient}>
+                      {loading ? '생성 중...' : '연결'}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ ...cardStyle, marginTop: 20 }}>
+                  <div style={cardHeaderStyle}>
+                    <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>세션 목록 ({sessions.length})</h2>
+                  </div>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>보드</th>
+                        <th style={thStyle}>클라이언트</th>
+                        <th style={thStyle}>상태</th>
+                        <th style={thStyle}>시작</th>
+                        <th style={thStyle}>만료</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sessions.map(s => (
+                        <tr key={s.id} style={rowHoverStyle}>
+                          <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.board.uniqueId}</td>
+                          <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.client.clientId}</td>
+                          <td style={tdStyle}>
+                            <span style={badgeStyle(s.status === 'ACTIVE' ? '#10b981' : '#9ca3af')}>
+                              {s.status === 'ACTIVE' ? '활성' : '종료'}
+                            </span>
+                          </td>
+                          <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(s.assignedAt).toLocaleString()}</td>
+                          <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(s.expiresAt).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                      {sessions.length === 0 && (
+                        <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>세션이 없습니다</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {tab === 'clients' && (
               <div style={cardStyle}>
-                <h2 style={sectionTitleStyle}>Clients ({clients.length})</h2>
+                <div style={cardHeaderStyle}>
+                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>클라이언트 ({clients.length})</h2>
+                </div>
                 <table style={tableStyle}>
                   <thead>
                     <tr>
-                      <th style={thStyle}>Client ID</th>
-                      <th style={thStyle}>User</th>
-                      <th style={thStyle}>Status</th>
-                      <th style={thStyle}>Actions</th>
+                      <th style={thStyle}>클라이언트 ID</th>
+                      <th style={thStyle}>사용자</th>
+                      <th style={thStyle}>상태</th>
+                      <th style={thStyle}>작업</th>
                     </tr>
                   </thead>
                   <tbody>
                     {clients.map(client => (
-                      <tr key={client.id}>
-                        <td style={tdStyle}>{client.clientId}</td>
+                      <tr key={client.id} style={rowHoverStyle}>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{client.clientId}</td>
                         <td style={tdStyle}>{client.userId ? client.userId.substring(0, 8) : '-'}</td>
                         <td style={tdStyle}>
-                          <span style={{ ...badgeStyle, background: getStatusColor(client.status) }}>
-                            {client.status}
+                          <span style={badgeStyle(statusColor[client.status] || '#888')}>
+                            {statusLabel[client.status] || client.status}
                           </span>
                         </td>
                         <td style={tdStyle}>
-                          <button style={buttonStyle} onClick={() => sendControl(client.clientId, 'DISCONNECT', 'client')}>
-                            Disconnect
-                          </button>
+                          <button style={btnStyle('#ef4444')} onClick={() => sendControl(client.clientId, 'DISCONNECT', 'client')}>연결 끊기</button>
                         </td>
                       </tr>
                     ))}
                     {clients.length === 0 && (
-                      <tr><td colSpan={4} style={{ ...tdStyle, textAlign: 'center' }}>No clients connected</td></tr>
+                      <tr><td colSpan={4} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>연결된 클라이언트가 없습니다</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
-            </div>
+            )}
 
-            <div style={cardStyle}>
-              <h2 style={sectionTitleStyle}>Create Session</h2>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <select style={selectStyle} value={selectedBoard} onChange={(e) => setSelectedBoard(e.target.value)}>
-                  <option value="">Select Board</option>
-                  {boards.filter(b => b.status === 'IDLE').map(board => (
-                    <option key={board.id} value={board.uniqueId}>{board.uniqueId}</option>
-                  ))}
-                </select>
-                <select style={selectStyle} value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
-                  <option value="">Select Client</option>
-                  {clients.map(client => (
-                    <option key={client.id} value={client.clientId}>{client.clientId}</option>
-                  ))}
-                </select>
-                <button style={{ ...buttonStyle, background: '#3b82f6' }} onClick={createSession} disabled={loading || !selectedBoard || !selectedClient}>
-                  {loading ? 'Creating...' : 'Connect'}
-                </button>
+            {tab === 'users' && (
+              <div style={cardStyle}>
+                <div style={cardHeaderStyle}>
+                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>사용자 ({users.length})</h2>
+                </div>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={thStyle}>사용자명</th>
+                      <th style={thStyle}>이메일</th>
+                      <th style={thStyle}>기관</th>
+                      <th style={thStyle}>활성</th>
+                      <th style={thStyle}>클라이언트</th>
+                      <th style={thStyle}>가입일</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map(user => (
+                      <tr key={user.id} style={rowHoverStyle}>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{user.username}</td>
+                        <td style={tdStyle}>{user.email || '-'}</td>
+                        <td style={tdStyle}>{user.orgName || '-'}</td>
+                        <td style={tdStyle}>
+                          <button
+                            style={toggleBtnStyle(user.active)}
+                            onClick={async () => {
+                              await fetch(`${API_BASE}/users/${user.id}/toggle`, { method: 'POST' });
+                              fetchData();
+                            }}
+                          >
+                            {user.active ? '활성' : '비활성'}
+                          </button>
+                        </td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#6b7280' }}>
+                          {user.clientId ? `${user.clientId.substring(0, 16)}...` : '-'}
+                        </td>
+                        <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(user.createdAt).toLocaleDateString()}</td>
+                      </tr>
+                    ))}
+                    {users.length === 0 && (
+                      <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>등록된 사용자가 없습니다</td></tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
-            </div>
-          </>
-        )}
-
-        {tab === 'users' && (
-          <div style={cardStyle}>
-            <h2 style={sectionTitleStyle}>Users ({users.length})</h2>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Username</th>
-                  <th style={thStyle}>Email</th>
-                  <th style={thStyle}>Organization</th>
-                  <th style={thStyle}>Active</th>
-                  <th style={thStyle}>Client</th>
-                  <th style={thStyle}>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(user => (
-                  <tr key={user.id}>
-                    <td style={tdStyle}><strong>{user.username}</strong></td>
-                    <td style={tdStyle}>{user.email || '-'}</td>
-                    <td style={tdStyle}>{user.orgName || '-'}</td>
-                    <td style={tdStyle}>
-                      <button
-                        style={{
-                          ...toggleStyle,
-                          background: user.active ? '#22c55e' : '#ef4444',
-                        }}
-                        onClick={async () => {
-                          await fetch(`${API_BASE}/users/${user.id}/toggle`, { method: 'POST' });
-                          fetchData();
-                        }}
-                      >
-                        {user.active ? 'Active' : 'Deactivated'}
-                      </button>
-                    </td>
-                    <td style={tdStyle}>{user.clientId ? user.clientId.substring(0, 16) + '...' : '-'}</td>
-                    <td style={tdStyle}>{new Date(user.createdAt).toLocaleDateString()}</td>
-                  </tr>
-                ))}
-                {users.length === 0 && (
-                  <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center' }}>No users registered</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+            )}
+          </main>
+        </div>
       )}
     </>
   );
 }
 
-const cardStyle: React.CSSProperties = {
-  background: '#fff',
-  borderRadius: 8,
-  padding: 20,
-  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+const layoutStyle: React.CSSProperties = {
+  display: 'flex',
+  height: '100vh',
+  background: '#f3f4f6',
+  fontFamily: "'Noto Sans KR', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
 };
 
-const sectionTitleStyle: React.CSSProperties = {
-  marginBottom: 16,
-  fontSize: 18,
-  color: '#333',
+const sidebarStyle: React.CSSProperties = {
+  width: 220,
+  background: '#1e293b',
+  padding: '24px 12px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 24,
+};
+
+const logoStyle: React.CSSProperties = {
+  fontSize: 22,
+  fontWeight: 800,
+  color: '#fff',
+  letterSpacing: 4,
+  padding: '0 12px',
+};
+
+const navItemStyle = (active: boolean): React.CSSProperties => ({
+  display: 'flex',
+  alignItems: 'center',
+  width: '100%',
+  padding: '10px 14px',
+  border: 'none',
+  borderRadius: 8,
+  background: active ? 'rgba(255,255,255,0.1)' : 'transparent',
+  color: active ? '#fff' : '#94a3b8',
+  fontSize: 14,
+  fontWeight: active ? 600 : 400,
+  cursor: 'pointer',
+  textAlign: 'left',
+  transition: 'all 0.15s',
+});
+
+const countStyle: React.CSSProperties = {
+  marginLeft: 'auto',
+  background: 'rgba(255,255,255,0.15)',
+  color: '#fff',
+  fontSize: 11,
+  fontWeight: 600,
+  padding: '1px 8px',
+  borderRadius: 10,
+};
+
+const mainStyle: React.CSSProperties = {
+  flex: 1,
+  overflow: 'auto',
+  padding: 24,
+};
+
+const headerStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 24,
+};
+
+const cardStyle: React.CSSProperties = {
+  background: '#fff',
+  borderRadius: 12,
+  overflow: 'hidden',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
+};
+
+const cardHeaderStyle: React.CSSProperties = {
+  padding: '16px 20px',
+  borderBottom: '1px solid #f3f4f6',
 };
 
 const tableStyle: React.CSSProperties = {
@@ -347,65 +500,81 @@ const tableStyle: React.CSSProperties = {
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',
-  padding: '8px 12px',
-  borderBottom: '2px solid #eee',
+  padding: '10px 20px',
+  fontSize: 12,
   fontWeight: 600,
-  fontSize: 14,
+  color: '#6b7280',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  background: '#f9fafb',
+  borderBottom: '1px solid #e5e7eb',
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '8px 12px',
-  borderBottom: '1px solid #eee',
+  padding: '12px 20px',
   fontSize: 14,
+  borderBottom: '1px solid #f3f4f6',
 };
 
-const badgeStyle: React.CSSProperties = {
+const rowHoverStyle: React.CSSProperties = {
+  transition: 'background 0.1s',
+};
+
+const badgeStyle = (color: string): React.CSSProperties => ({
   display: 'inline-block',
-  padding: '2px 8px',
-  borderRadius: 4,
+  padding: '3px 10px',
+  borderRadius: 20,
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#fff',
+  background: color,
+});
+
+const btnStyle = (color: string): React.CSSProperties => ({
+  padding: '5px 12px',
+  border: 'none',
+  borderRadius: 6,
+  background: color,
+  color: '#fff',
   fontSize: 12,
   fontWeight: 500,
-  color: '#fff',
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: '4px 12px',
-  border: 'none',
-  borderRadius: 4,
-  background: '#ef4444',
-  color: '#fff',
-  fontSize: 12,
   cursor: 'pointer',
+  opacity: 0.9,
+  transition: 'opacity 0.15s',
+});
+
+const primaryBtnStyle: React.CSSProperties = {
+  padding: '8px 20px',
+  border: 'none',
+  borderRadius: 8,
+  background: '#3b82f6',
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: 'pointer',
+  transition: 'background 0.15s',
 };
 
 const selectStyle: React.CSSProperties = {
   padding: '8px 12px',
-  border: '1px solid #ddd',
-  borderRadius: 4,
+  border: '1px solid #d1d5db',
+  borderRadius: 8,
   fontSize: 14,
-  minWidth: 150,
+  minWidth: 160,
+  background: '#fff',
+  color: '#111827',
 };
 
-const tabStyle = (active: boolean): React.CSSProperties => ({
-  padding: '8px 20px',
+const toggleBtnStyle = (active: boolean): React.CSSProperties => ({
+  padding: '4px 14px',
   border: 'none',
-  borderRadius: 6,
-  background: active ? '#3b82f6' : '#e5e7eb',
-  color: active ? '#fff' : '#374151',
-  fontSize: 14,
-  fontWeight: 500,
-  cursor: 'pointer',
-});
-
-const toggleStyle: React.CSSProperties = {
-  padding: '4px 12px',
-  border: 'none',
-  borderRadius: 12,
+  borderRadius: 20,
+  background: active ? '#10b981' : '#ef4444',
   color: '#fff',
   fontSize: 12,
   fontWeight: 600,
   cursor: 'pointer',
-  minWidth: 90,
-};
+  minWidth: 60,
+});
 
 export default App;

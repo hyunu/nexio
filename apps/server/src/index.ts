@@ -19,6 +19,7 @@ const heartbeatTimers = new Map<string, NodeJS.Timeout>();
 const boardCommandQueues = new Map<string, any[]>();
 const monitorConnections = new Map<string, WebSocket>();
 const boardLogs = new Map<string, any[]>();
+const discardAckWaiters = new Map<string, { resolve: (v: boolean) => void; timer: NodeJS.Timeout }>();
 
 const prisma = new PrismaClient();
 
@@ -26,6 +27,16 @@ function queueBoardCommand(boardId: string, cmd: any) {
   const existing = boardCommandQueues.get(boardId) || [];
   existing.push(cmd);
   boardCommandQueues.set(boardId, existing);
+}
+
+function waitForDiscardAck(boardId: string, timeoutMs: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      discardAckWaiters.delete(boardId);
+      resolve(false);
+    }, timeoutMs);
+    discardAckWaiters.set(boardId, { resolve, timer });
+  });
 }
 
 function sendToBoard(boardId: string, cmd: any) {
@@ -52,6 +63,7 @@ async function start() {
 
   fastify.get('/api/boards', async () => {
     const boards = await prisma.board.findMany({
+      where: { status: { not: 'DISCARDED' } },
       orderBy: { connectedAt: 'desc' },
     });
     return boards;
@@ -74,10 +86,10 @@ async function start() {
     return boards;
   });
 
-  fastify.get('/api/boards/onboarding', async (request: any) => {
+  fastify.get('/api/boards/onboarding', async (request: any, reply: any) => {
     const { mac } = request.query;
     if (!mac) {
-      return { error: 'MAC address is required' }, 400;
+      return reply.status(400).send({ error: 'MAC address is required' });
     }
     const board = await prisma.board.findFirst({
       where: { macAddress: mac },
@@ -137,17 +149,26 @@ async function start() {
     return { uniqueId };
   });
 
-  fastify.post('/api/sessions', async (request: any) => {
+  fastify.get('/api/sessions', async () => {
+    const sessions = await prisma.session.findMany({
+      include: { board: { select: { uniqueId: true } }, client: { select: { clientId: true } } },
+      orderBy: { assignedAt: 'desc' },
+      take: 100,
+    });
+    return sessions;
+  });
+
+  fastify.post('/api/sessions', async (request: any, reply: any) => {
     const { boardId, clientId, duration = 3600 } = request.body;
 
     const board = await prisma.board.findUnique({ where: { uniqueId: boardId } });
     if (!board || board.status !== 'IDLE') {
-      return { error: 'Board not available' }, 404;
+      return reply.status(404).send({ error: 'Board not available' });
     }
 
     const client = await prisma.client.findUnique({ where: { clientId } });
     if (!client) {
-      return { error: 'Client not found' }, 404;
+      return reply.status(404).send({ error: 'Client not found' });
     }
 
     const now = new Date();
@@ -194,12 +215,12 @@ async function start() {
     return session;
   });
 
-  fastify.delete('/api/sessions/:id', async (request: any) => {
+  fastify.delete('/api/sessions/:id', async (request: any, reply: any) => {
     const { id } = request.params;
     const session = await prisma.session.findUnique({ where: { id } });
 
     if (!session) {
-      return { error: 'Session not found' }, 404;
+      return reply.status(404).send({ error: 'Session not found' });
     }
 
     await prisma.board.update({
@@ -227,22 +248,13 @@ async function start() {
     return { success: true };
   });
 
-  fastify.post('/api/boards/:id/discard', async (request: any) => {
+  fastify.post('/api/boards/:id/discard', async (request: any, reply: any) => {
     const { id } = request.params;
 
     const board = await prisma.board.findUnique({ where: { uniqueId: id } });
     if (!board) {
-      return { error: 'Board not found' }, 404;
+      return reply.status(404).send({ error: 'Board not found' });
     }
-
-    if (board.status === 'DISCARDED') {
-      return { message: 'Already discarded' };
-    }
-
-    await prisma.board.update({
-      where: { id: board.id },
-      data: { status: 'DISCARDED' },
-    });
 
     sendToBoard(id, {
       type: 'CONTROL',
@@ -250,11 +262,51 @@ async function start() {
       timestamp: Date.now(),
       targetId: id,
       action: 'DISCARD',
-      reason: 'board_discarded',
+      reason: 'admin_discard',
     });
-    boardConnections.delete(id);
 
+    const ackReceived = await waitForDiscardAck(id, 5000);
+
+    await prisma.board.delete({ where: { uniqueId: id } }).catch(() => {});
+    boardCommandQueues.delete(id);
+    boardConnections.delete(id);
+    clearHeartbeatTimer(id);
+
+    return { success: true, discarded: true, ackReceived };
+  });
+
+  fastify.post('/api/boards/discard-by-mac', async (request: any, reply: any) => {
+    const { macAddress } = request.body;
+    if (!macAddress) {
+      return reply.status(400).send({ error: 'MAC address is required' });
+    }
+    const board = await prisma.board.findFirst({ where: { macAddress } });
+    if (!board) {
+      return reply.status(404).send({ error: 'Board not found' });
+    }
+    const id = board.uniqueId;
+    await prisma.board.delete({ where: { id: board.id } }).catch(() => {});
+    boardCommandQueues.delete(id);
+    boardConnections.delete(id);
+    clearHeartbeatTimer(id);
     return { success: true, discarded: true };
+  });
+
+  fastify.patch('/api/boards/:id', async (request: any, reply: any) => {
+    const { id } = request.params;
+    const { location } = request.body;
+
+    const board = await prisma.board.findUnique({ where: { uniqueId: id } });
+    if (!board) {
+      return reply.status(404).send({ error: 'Board not found' });
+    }
+
+    await prisma.board.update({
+      where: { uniqueId: id },
+      data: { location },
+    });
+
+    return { success: true };
   });
 
   fastify.post('/api/control', async (request: any) => {
@@ -291,11 +343,11 @@ async function start() {
 
   fastify.post('/api/board/message', async (request: any, reply) => {
     const msg = request.body;
-    const { type, boardId: macAddr, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId, sourceId } = msg;
+    const { type, boardId: macAddr, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId, sourceId, productConnected } = msg;
     const commands: any[] = [];
 
     if (type === 'REGISTER') {
-      let uniqueId: string;
+      let uniqueId!: string;
 
       if (preAssignedId) {
         const claimed = await prisma.board.findUnique({ where: { uniqueId: preAssignedId } });
@@ -310,14 +362,14 @@ async function start() {
             });
             await prisma.board.update({
               where: { id: claimed.id },
-              data: { firmwareVersion, displayAvailable, status: 'IDLE', connectedAt: new Date() },
+              data: { firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
             });
           }
         }
         if (!claimed || claimed.status === 'DISCARDED') {
           uniqueId = preAssignedId;
           await prisma.board.create({
-            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE' },
+            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
           });
         }
       } else {
@@ -329,7 +381,7 @@ async function start() {
             uniqueId = existingBoard.uniqueId;
             await prisma.board.update({
               where: { id: existingBoard.id },
-              data: { status: 'IDLE', connectedAt: new Date() },
+              data: { productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
             });
           }
         }
@@ -341,7 +393,7 @@ async function start() {
           const nextNum = lastBoard ? parseInt(lastBoard.uniqueId, 10) + 1 : 1;
           uniqueId = `${String(nextNum).padStart(4, '0')}`;
           await prisma.board.create({
-            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, status: 'IDLE' },
+            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
           });
         }
       }
@@ -375,6 +427,12 @@ async function start() {
         boardCommandQueues.delete(boardId);
         boardConnections.delete(boardId);
         clearHeartbeatTimer(boardId);
+        const waiter = discardAckWaiters.get(boardId);
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          discardAckWaiters.delete(boardId);
+          waiter.resolve(true);
+        }
       }
       return { success: true };
     }
@@ -425,10 +483,10 @@ async function start() {
     return users;
   });
 
-  fastify.post('/api/users/:id/toggle', async (request: any) => {
+  fastify.post('/api/users/:id/toggle', async (request: any, reply: any) => {
     const { id } = request.params;
     const user = await prisma.user.findUnique({ where: { id } });
-    if (!user) return { error: 'User not found' }, 404;
+    if (!user) return reply.status(404).send({ error: 'User not found' });
     const updated = await prisma.user.update({
       where: { id },
       data: { active: !user.active },
@@ -436,21 +494,21 @@ async function start() {
     return { id: updated.id, active: updated.active };
   });
 
-  fastify.post('/api/auth/register', async (request: any) => {
+  fastify.post('/api/auth/register', async (request: any, reply: any) => {
     const { username, password, email, orgName } = request.body;
     if (!username || !password) {
-      return { error: 'Username and password required' }, 400;
+      return reply.status(400).send({ error: 'Username and password required' });
     }
     if (username.length < 3) {
-      return { error: 'Username must be at least 3 characters' }, 400;
+      return reply.status(400).send({ error: 'Username must be at least 3 characters' });
     }
     if (password.length < 4) {
-      return { error: 'Password must be at least 4 characters' }, 400;
+      return reply.status(400).send({ error: 'Password must be at least 4 characters' });
     }
 
     const existing = await prisma.user.findUnique({ where: { username } });
     if (existing) {
-      return { error: 'Username already taken' }, 409;
+      return reply.status(409).send({ error: 'Username already taken' });
     }
 
     const salt = crypto.randomBytes(16).toString('hex');
@@ -465,24 +523,24 @@ async function start() {
     return { userId: user.id, username: user.username, email: user.email, orgName: user.orgName, token: user.token };
   });
 
-  fastify.post('/api/auth/login', async (request: any) => {
+  fastify.post('/api/auth/login', async (request: any, reply: any) => {
     const { username, password } = request.body;
     if (!username || !password) {
-      return { error: 'Username and password required' }, 400;
+      return reply.status(400).send({ error: 'Username and password required' });
     }
 
     const user = await prisma.user.findUnique({ where: { username } });
     if (!user) {
-      return { error: 'Invalid username or password' }, 401;
+      return reply.status(401).send({ error: 'Invalid username or password' });
     }
     if (!user.active) {
-      return { error: 'Account is deactivated' }, 403;
+      return reply.status(403).send({ error: 'Account is deactivated' });
     }
 
     const [salt, storedHash] = user.password.split(':');
     const hash = crypto.scryptSync(password, salt, 64).toString('hex');
     if (hash !== storedHash) {
-      return { error: 'Invalid username or password' }, 401;
+      return reply.status(401).send({ error: 'Invalid username or password' });
     }
 
     if (!user.token) {
@@ -597,10 +655,10 @@ async function start() {
 
 async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: string) => void) {
   try {
-  const { type, boardId, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId } = msg;
+  const { type, boardId, firmwareVersion, displayAvailable, sessionId, payload, direction, id, uniqueId: preAssignedId, productConnected } = msg;
 
   if (type === 'REGISTER') {
-    let uniqueId: string;
+    let uniqueId!: string;
 
     if (preAssignedId) {
       const claimed = await prisma.board.findUnique({
@@ -620,6 +678,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
             data: {
               firmwareVersion,
               displayAvailable,
+              productConnected: productConnected ?? false,
               status: 'IDLE',
               connectedAt: new Date(),
             },
@@ -634,6 +693,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
             macAddress: boardId,
             firmwareVersion,
             displayAvailable,
+            productConnected: productConnected ?? false,
             status: 'IDLE',
           },
         });
@@ -650,7 +710,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
           uniqueId = existingBoard.uniqueId;
           await prisma.board.update({
             where: { id: existingBoard.id },
-            data: { status: 'IDLE', connectedAt: new Date() },
+            data: { productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
           });
         }
       }
@@ -667,6 +727,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
             macAddress: boardId,
             firmwareVersion,
             displayAvailable,
+            productConnected: productConnected ?? false,
             status: 'IDLE',
           },
         });
@@ -731,6 +792,19 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       if (logs.length > 500) logs.shift();
       boardLogs.set(boardUniqueId, logs);
       broadcastToMonitors({ boardId: boardUniqueId, type: 'LOG', ...entry });
+    }
+  }
+
+  if (type === 'DISCARD_ACK') {
+    const boardId = id || msg.uniqueId;
+    if (boardId) {
+      const waiter = discardAckWaiters.get(boardId);
+      if (waiter) {
+        debugLog(`DISCARD_ACK received for ${boardId}`);
+        waiter.resolve(true);
+        clearTimeout(waiter.timer);
+        discardAckWaiters.delete(boardId);
+      }
     }
   }
   } catch (err) {
