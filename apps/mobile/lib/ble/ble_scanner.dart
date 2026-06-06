@@ -13,6 +13,7 @@ enum NexioDeviceState {
 class BleScanner {
   static const String _serviceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const String _charWriteUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+  static const String _charNotifyUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 
   static const int _mfgCompanyId = 0x02D5;
   static const int _flagPrd = 0x01;
@@ -92,6 +93,28 @@ class BleScanner {
       return false;
     } catch (e) {
       return false;
+    }
+  }
+
+  Stream<String> subscribeToLogs(BluetoothDevice device) async* {
+    List<BluetoothService> services = await device.discoverServices();
+    for (var service in services) {
+      if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
+        for (var characteristic in service.characteristics) {
+          if (characteristic.uuid.str.toLowerCase() ==
+              _charNotifyUuid.toLowerCase()) {
+            await characteristic.setNotifyValue(true);
+            yield* characteristic.onValueReceived.transform(
+              StreamTransformer<List<int>, String>.fromHandlers(
+                handleData: (data, sink) {
+                  sink.add(String.fromCharCodes(data));
+                },
+              ),
+            );
+            return;
+          }
+        }
+      }
     }
   }
 

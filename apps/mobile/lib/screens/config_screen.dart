@@ -7,6 +7,14 @@ import '../services/server_service.dart';
 
 enum OnboardingStage { form, sending, waiting, completed, failed }
 
+class _LogEntry {
+  final DateTime timestamp;
+  final String level;
+  final String message;
+
+  _LogEntry({required this.timestamp, required this.level, required this.message});
+}
+
 class ConfigScreen extends StatefulWidget {
   final BluetoothDevice device;
   final String serverUrl;
@@ -36,6 +44,8 @@ class _ConfigScreenState extends State<ConfigScreen> {
   OnboardingStage _stage = OnboardingStage.form;
   String? _boardUniqueId;
   Timer? _pollTimer;
+  StreamSubscription<String>? _logSubscription;
+  final List<_LogEntry> _bleLogs = [];
 
   @override
   void initState() {
@@ -56,10 +66,36 @@ class _ConfigScreenState extends State<ConfigScreen> {
       setState(() {
         _statusMessage = 'Connected. Enter WiFi details.';
       });
+      _subscribeToBleLogs();
     } catch (e) {
       setState(() {
         _statusMessage = 'Connection failed: $e';
       });
+    }
+  }
+
+  Future<void> _subscribeToBleLogs() async {
+    try {
+      final logStream = _bleScanner.subscribeToLogs(widget.device);
+      _logSubscription = logStream.listen((message) {
+        if (!mounted) return;
+        String level = 'info';
+        String display = message;
+        if (message.contains('FAILED') || message.contains('Error') || message.contains('timeout')) {
+          level = 'error';
+        } else if (message.contains('retrying') || message.contains('not found') || message.contains('Wrong password')) {
+          level = 'error';
+        }
+        setState(() {
+          _bleLogs.add(_LogEntry(
+            timestamp: DateTime.now(),
+            level: level,
+            message: display.trim(),
+          ));
+        });
+      });
+    } catch (e) {
+      // BLE log subscription failed silently
     }
   }
 
@@ -163,19 +199,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
     _passwordController.dispose();
     _serverUrlController.dispose();
     _pollTimer?.cancel();
+    _logSubscription?.cancel();
     widget.device.disconnect();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool showLogPanel = _stage == OnboardingStage.sending || _stage == OnboardingStage.waiting || _stage == OnboardingStage.failed;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Configure WiFi'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: Form(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -276,42 +319,103 @@ class _ConfigScreenState extends State<ConfigScreen> {
                                   : Colors.blue.shade800,
                         ),
                       ),
+                    ),
                     ],
-                  ),
                 ),
-              const SizedBox(height: 16),
-              if (_stage == OnboardingStage.form || _stage == OnboardingStage.sending)
-                ElevatedButton.icon(
-                  onPressed: _isConnecting ? null : _sendConfig,
-                  icon: _isConnecting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send),
-                  label: Text(_isConnecting ? 'Sending...' : 'Send Configuration'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                ),
-              if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
-                ElevatedButton.icon(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.check),
-                  label: const Text('Done'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    backgroundColor: _stage == OnboardingStage.completed
-                        ? Colors.green
-                        : Colors.red,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
+              ),
             ],
           ),
         ),
       ),
-    );
-  }
+      ),
+      if (showLogPanel) const SizedBox(height: 8),
+      if (showLogPanel)
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade900,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: _bleLogs.isEmpty
+                ? const Center(
+                    child: Text(
+                      'Waiting for board logs...',
+                      style: TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: _bleLogs.length,
+                    itemBuilder: (context, index) {
+                      final log = _bleLogs[index];
+                      final time =
+                          '${log.timestamp.hour.toString().padLeft(2, '0')}:'
+                          '${log.timestamp.minute.toString().padLeft(2, '0')}:'
+                          '${log.timestamp.second.toString().padLeft(2, '0')}';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1),
+                        child: Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '$time ',
+                                style: const TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 11,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                              TextSpan(
+                                text: log.message,
+                                style: TextStyle(
+                                  color: log.level == 'error'
+                                      ? Colors.red.shade300
+                                      : Colors.green.shade300,
+                                  fontSize: 11,
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+        ),
+      ),
+      const SizedBox(height: 8),
+      if (_stage == OnboardingStage.form || _stage == OnboardingStage.sending)
+        ElevatedButton.icon(
+          onPressed: _isConnecting ? null : _sendConfig,
+          icon: _isConnecting
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send),
+          label: Text(_isConnecting ? 'Sending...' : 'Send Configuration'),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+          ),
+        ),
+      if (_stage == OnboardingStage.completed || _stage == OnboardingStage.failed)
+        ElevatedButton.icon(
+          onPressed: () => Navigator.pop(context),
+          icon: const Icon(Icons.check),
+          label: const Text('Done'),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            backgroundColor: _stage == OnboardingStage.completed
+                ? Colors.green
+                : Colors.red,
+            foregroundColor: Colors.white,
+          ),
+        ),
+    ],
+  ),
+  ),
+);
+}
+}
 }
