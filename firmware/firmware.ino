@@ -20,7 +20,7 @@ bool productConnected = false;
 bool onboarded = false;
 bool registered = false;
 
-unsigned long lastHeartbeat = 0;
+unsigned long lastServerMessage = 0;
 unsigned long lastRegisterAttempt = 0;
 
 void updateStatusFlags();
@@ -65,7 +65,7 @@ void loop() {
     Serial.print("[LOOP] WiFi connected to "); Serial.println(currentSsid);
     delay(1000);
     registered = false;
-    lastHeartbeat = 0;
+    lastServerMessage = 0;
   } else if (!wifiState && wifiConnected) {
     wifiConnected = false;
     productConnected = false;
@@ -105,8 +105,8 @@ void loop() {
   }
 
   if (wifiConnected && registered) {
-    if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL) {
-      lastHeartbeat = millis();
+    if (millis() - lastServerMessage > HEARTBEAT_INTERVAL) {
+      lastServerMessage = millis();
 
       JsonDocument doc;
       doc["type"] = "HEARTBEAT";
@@ -239,6 +239,7 @@ void sendDataToServer(const uint8_t* data, size_t len) {
   serializeJson(doc, output);
   BoardResponse resp;
   httpBoardMessage(serverHost, serverPort, output, resp);
+  lastServerMessage = millis();
 }
 
 void onWiFiConfigured(const String& ssid, const String& pass, const String& url, const String& boardUniqueId) {

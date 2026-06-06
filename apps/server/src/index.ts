@@ -648,6 +648,8 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
   }
 
   if (type === 'DATA_RELAY' && sessionId) {
+    const boardUniqueId = id || boardId;
+    if (boardUniqueId) resetHeartbeatTimer(boardUniqueId);
     const session = await prisma.session.findUnique({ where: { id: sessionId } });
     if (session) {
       const client = await prisma.client.findUnique({ where: { id: session.clientId } });
