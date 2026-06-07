@@ -33,14 +33,15 @@
 
 #define MESSAGE_VERSION "1.0"
 
-#define DISPLAY_CS_PIN 10
-#define DISPLAY_DC_PIN 2
-#define DISPLAY_RST_PIN 3
-#define DISPLAY_SCK_PIN 10
-#define DISPLAY_MOSI_PIN 7
-#define DISPLAY_MISO_PIN 8
+#define DISPLAY_CS_PIN -1   // disabled by default to avoid using flash pins
+#define DISPLAY_DC_PIN -1
+#define DISPLAY_RST_PIN -1
+#define DISPLAY_SCK_PIN -1
+#define DISPLAY_MOSI_PIN -1
+#define DISPLAY_MISO_PIN -1
 
-#define STATUS_LED_PIN 8
+// Use a safe GPIO for status LED (avoid flash pins 6..11). GPIO2 is typically safe.
+#define STATUS_LED_PIN 2
 
 // Flash pins range on many ESP32-C3 modules (avoid using them for GPIO functions)
 #define FLASH_PIN_MIN 6
