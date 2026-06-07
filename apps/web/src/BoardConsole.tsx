@@ -1,7 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 
-const WS_URL = 'ws://localhost:10008/ws/monitor';
-const API_BASE = 'http://localhost:10008/api';
+// Resolve API/WS URLs relative to current origin so app works when served from server/container
+const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string) || '/api';
+const WS_URL = (() => {
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}/ws/monitor`;
+  } catch {
+    return 'ws://localhost:10008/ws/monitor';
+  }
+})();
 
 interface BoardDetail {
   board: {
@@ -90,7 +98,7 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'Pretendard, -apple-system, BlinkMacSystemFont, system-ui, sans-serif', background: '#0f172a' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: "'NanumSquareRound', 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, sans-serif", background: '#0f172a' }}>
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '14px 24px', background: '#1e293b', color: '#fff',

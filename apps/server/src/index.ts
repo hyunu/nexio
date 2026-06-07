@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
+import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -58,6 +60,26 @@ async function start() {
   const fastify = Fastify({ logger: true });
 
   await fastify.register(cors, { origin: true });
+  // Serve built frontend if available (apps/web/dist)
+  try {
+    // Use process.cwd() to reliably locate built frontend in the container
+    const staticDir = path.join(process.cwd(), 'apps', 'web', 'dist');
+    if (fs.existsSync(staticDir)) {
+      await fastify.register(fastifyStatic, {
+        root: staticDir,
+        prefix: '/',
+      });
+      // SPA fallback: serve index.html for unknown GET routes
+      fastify.setNotFoundHandler((request: any, reply: any) => {
+        if (request.raw.method === 'GET') {
+          return reply.sendFile('index.html');
+        }
+        return reply.callNotFound();
+      });
+    }
+  } catch (err) {
+    console.error('Error registering static assets:', err);
+  }
 
   fastify.get('/api/health', async () => ({ status: 'ok', timestamp: Date.now() }));
 
@@ -102,6 +124,7 @@ async function start() {
   fastify.get('/api/clients', async () => {
     const clients = await prisma.client.findMany({
       orderBy: { connectedAt: 'desc' },
+      include: { user: { select: { username: true } } },
     });
     return clients;
   });
@@ -309,7 +332,7 @@ async function start() {
   });
 
   fastify.post('/api/control', async (request: any) => {
-    const { targetId, action, type } = request.body;
+    const { targetId, action, type, payload } = request.body;
 
     if (type === 'board') {
       const board = await prisma.board.findUnique({ where: { uniqueId: targetId } });
@@ -327,14 +350,75 @@ async function start() {
       const ws = clientConnections.get(targetId);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
-          type: 'CONTROL',
+          type: action === 'PING' ? 'PING' : 'CONTROL',
           version: MESSAGE_VERSION,
           timestamp: Date.now(),
           targetId,
           action,
           reason: 'admin_request',
+          payload,
         }));
+
+        if (action === 'PING') {
+          return { success: true, reachable: true, message: '핑 전송 성공' };
+        }
+
+        if (action === 'DISCONNECT') {
+          ws.close();
+          await prisma.client.updateMany({
+            where: { clientId: targetId },
+            data: { status: 'DISCONNECTED' },
+          });
+          clientConnections.delete(targetId);
+          clearHeartbeatTimer(targetId);
+        }
+      } else {
+        if (action === 'PING') return { success: true, reachable: false, message: '클라이언트 연결 안됨' };
+        return { success: false, error: 'Client not connected' };
       }
+    }
+
+    return { success: true };
+  });
+
+  fastify.post('/api/sessions/:id/terminate', async (request: any, reply: any) => {
+    const { id } = request.params;
+    const session = await prisma.session.findUnique({
+      where: { id },
+      include: { board: true, client: true },
+    });
+    if (!session) return reply.status(404).send({ error: 'Session not found' });
+
+    await prisma.session.update({
+      where: { id },
+      data: { status: 'TERMINATED' },
+    });
+    await prisma.board.update({
+      where: { id: session.board.id },
+      data: { status: 'IDLE' },
+    });
+
+    const clientWs = clientConnections.get(session.client.clientId);
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: 'CONTROL',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        action: 'SESSION_TERMINATED',
+        reason: 'admin_request',
+        sessionId: id,
+      }));
+    }
+
+    const boardData = await prisma.board.findUnique({ where: { id: session.board.id } });
+    if (boardData?.wsConnection) {
+      sendToBoard(session.board.uniqueId, {
+        type: 'END_SESSION',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        sessionId: id,
+        reason: 'admin_request',
+      });
     }
 
     return { success: true };
@@ -469,7 +553,7 @@ async function start() {
   fastify.get('/api/users', async () => {
     const users = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
-      select: { id: true, username: true, email: true, orgName: true, active: true, clientId: true, createdAt: true },
+      select: { id: true, username: true, email: true, orgName: true, active: true, admin: true, clientId: true, createdAt: true },
     });
     return users;
   });
@@ -483,6 +567,17 @@ async function start() {
       data: { active: !user.active },
     });
     return { id: updated.id, active: updated.active };
+  });
+
+  fastify.post('/api/users/:id/toggle-admin', async (request: any, reply: any) => {
+    const { id } = request.params;
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.status(404).send({ error: 'User not found' });
+    const updated = await prisma.user.update({
+      where: { id },
+      data: { admin: !user.admin },
+    });
+    return { id: updated.id, admin: updated.admin };
   });
 
   fastify.post('/api/auth/register', async (request: any, reply: any) => {
@@ -815,6 +910,9 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
     const newClientId = clientId || resolvedUserId || `CLIENT-${Date.now()}`;
 
     let client = await prisma.client.findUnique({ where: { clientId: newClientId } });
+    if (!client && resolvedUserId) {
+      client = await prisma.client.findFirst({ where: { userId: resolvedUserId } });
+    }
     if (!client) {
       client = await prisma.client.create({
         data: { clientId: newClientId, userId: resolvedUserId, status: 'CONNECTED' },
@@ -822,7 +920,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
     } else {
       await prisma.client.update({
         where: { id: client.id },
-        data: { status: 'CONNECTED', userId: resolvedUserId, connectedAt: new Date() },
+        data: { clientId: newClientId, status: 'CONNECTED', userId: resolvedUserId, connectedAt: new Date() },
       });
     }
 

@@ -9,13 +9,12 @@ COPY apps/server/package*.json ./apps/server/
 COPY packages/shared-types/package*.json ./packages/shared-types/
 
 RUN npm install
-
 COPY . .
 
+# Build shared types, web frontend, and server
 RUN npm run build -w packages/shared-types
-
+RUN cd apps/web && npm install && npm run build
 RUN npx prisma generate --schema=apps/server/prisma/schema.prisma
-
 RUN npm run build -w apps/server
 
 FROM node:20-slim

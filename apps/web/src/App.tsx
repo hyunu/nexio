@@ -1,7 +1,15 @@
 import { useState, useEffect } from 'react';
 import BoardConsole from './BoardConsole';
 
-const API_BASE = 'http://localhost:10008/api';
+// Use relative API path so front-end works when served from the same origin (Docker/container)
+const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string) || '/api';
+
+const sidebarNav: { key: 'boards' | 'sessions' | 'clients' | 'users'; label: string; icon: string }[] = [
+  { key: 'boards', label: '보드', icon: '보드' },
+  { key: 'sessions', label: '세션', icon: '세션' },
+  { key: 'clients', label: '클라이언트', icon: '클라이언트' },
+  { key: 'users', label: '사용자', icon: '사용자' },
+];
 
 interface Board {
   id: string;
@@ -32,6 +40,7 @@ interface Client {
   status: string;
   connectedAt: string;
   updatedAt: string;
+  user: { username: string } | null;
 }
 
 interface User {
@@ -40,6 +49,7 @@ interface User {
   email: string;
   orgName: string;
   active: boolean;
+  admin: boolean;
   clientId: string;
   createdAt: string;
 }
@@ -64,12 +74,21 @@ const statusDescriptions: Record<string, string> = {
   CLAIMED: '폰에서 고유 ID를 할당받았으나 아직 REGISTER 메시지를 보내지 않음',
 };
 
-const sidebarNav = [
-  { key: 'boards', label: '릴레이 모듈', icon: '◈' },
-  { key: 'sessions', label: '세션', icon: '◈' },
-  { key: 'clients', label: '클라이언트', icon: '◈' },
-  { key: 'users', label: '사용자', icon: '◉' },
-];
+const clientStatusDescriptions: Record<string, string> = {
+  CONNECTED: 'WebSocket으로 서버에 연결되어 있으며 명령을 수신할 수 있는 상태',
+  DISCONNECTED: 'WebSocket 연결이 종료된 상태. 재연결 시 DB에서 제거 후 새로 등록',
+};
+
+function timeAgo(dateStr: string): string {
+  if (!dateStr) return '-';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '방금';
+  if (min < 60) return `${min}분 전`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
+  return `${Math.floor(hr / 24)}일 전`;
+}
 
 function App() {
   const [boards, setBoards] = useState<Board[]>([]);
@@ -85,12 +104,19 @@ function App() {
   const [editingLocation, setEditingLocation] = useState<Record<string, string>>({});
   const [savingLocation, setSavingLocation] = useState<Record<string, boolean>>({});
   const [showStatusInfo, setShowStatusInfo] = useState(false);
+  const [showClientStatusInfo, setShowClientStatusInfo] = useState(false);
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(''), 5000);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   async function fetchData() {
     try {
@@ -147,12 +173,17 @@ function App() {
 
   async function sendControl(targetId: string, action: string, type: string) {
     try {
-      await fetch(`${API_BASE}/control`, {
+      const res = await fetch(`${API_BASE}/control`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetId, action, type }),
       });
-      setMessage(`제어 명령 전송: ${action}`);
+      const data = await res.json();
+      if (action === 'PING') {
+        setMessage(data.reachable ? '✓ 핑 응답 성공' : '✗ 핑 응답 없음');
+      } else {
+        setMessage(data.message || `제어 명령 전송: ${action}`);
+      }
     } catch {
       setMessage('제어 명령 전송 실패');
     }
@@ -175,6 +206,8 @@ function App() {
                   <span style={{ marginRight: 10 }}>{item.icon}</span>
                   {item.label}
                   {item.key === 'boards' && <span style={countStyle}>{boards.length}</span>}
+                  {item.key === 'clients' && <span style={countStyle}>{clients.filter(c => c.status === 'CONNECTED').length}</span>}
+                  {item.key === 'users' && <span style={countStyle}>{users.length}</span>}
                 </button>
               ))}
             </nav>
@@ -242,16 +275,16 @@ function App() {
                           <th style={thStyle}>연결상태</th>
                           <th style={thStyle}>설치장소</th>
                           <th style={thStyle}>연결 시간</th>
-                          <th style={{ ...thStyle, textAlign: 'right' }}>작업</th>
+                          <th style={thStyle}>작업</th>
                         </tr>
                       </thead>
                       <tbody>
                         {boards.map(board => (
                           <tr key={board.id} style={{ ...rowHoverStyle, opacity: board.status === 'DISCARDED' ? 0.5 : 1 }}>
-                            <td style={tdStyle}>
+                            <td style={{ ...tdStyle, textAlign: 'center' }}>
                               <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{board.uniqueId}</span>
                             </td>
-                            <td style={tdStyle}>
+                            <td style={{ ...tdStyle, textAlign: 'center' }}>
                               <span style={badgeStyle(statusColor[board.status] || '#888')}>
                                 {statusLabel[board.status] || board.status}
                               </span>
@@ -295,15 +328,15 @@ function App() {
                               <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
                                 {board.status !== 'DISCARDED' && (
                                   <>
-                                    <button style={btnStyle('#f59e0b')} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>재시작</button>
-                                    <button style={btnStyle('#3b82f6')} onClick={() => setConsoleBoard(board.uniqueId)}>콘솔</button>
+                                    <button style={actionBtnStyle} onClick={() => setConsoleBoard(board.uniqueId)}>콘솔</button>
+                                    <button style={actionBtnStyle} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>재시작</button>
                                   </>
                                 )}
-                                <button style={btnStyle(board.status === 'DISCARDED' ? '#6b7280' : '#ef4444')} onClick={async () => {
+                                <button style={board.status === 'DISCARDED' ? disabledActionBtnStyle : dangerActionBtnStyle} onClick={async () => {
                                   if (board.status === 'DISCARDED') return;
                                   await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' });
                                   fetchData();
-                                }}>{board.status === 'DISCARDED' ? '삭제' : '공장 초기화'}</button>
+                                }}>삭제</button>
                               </div>
                             </td>
                           </tr>
@@ -333,7 +366,7 @@ function App() {
                     </select>
                     <select style={selectStyle} value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
                       <option value="">클라이언트 선택</option>
-                      {clients.map(client => (
+                    {clients.filter(c => c.status === 'CONNECTED').map(client => (
                         <option key={client.id} value={client.clientId}>{client.clientId}</option>
                       ))}
                     </select>
@@ -354,25 +387,31 @@ function App() {
                         <th style={thStyle}>상태</th>
                         <th style={thStyle}>시작</th>
                         <th style={thStyle}>만료</th>
+                        <th style={thStyle}>작업</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sessions.map(s => (
                         <tr key={s.id} style={rowHoverStyle}>
-                          <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.board.uniqueId}</td>
-                          <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.client.clientId}</td>
-                          <td style={tdStyle}>
+                          <td style={{ ...tdStyle, fontFamily: 'monospace', textAlign: 'center' }}>{s.board.uniqueId}</td>
+                          <td style={{ ...tdStyle, fontFamily: 'monospace', textAlign: 'center' }}>{s.client.clientId}</td>
+                          <td style={{ ...tdStyle, textAlign: 'center' }}>
                             <span style={badgeStyle(s.status === 'ACTIVE' ? '#10b981' : '#9ca3af')}>
                               {s.status === 'ACTIVE' ? '활성' : '종료'}
                             </span>
                           </td>
-                          <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(s.assignedAt).toLocaleString()}</td>
-                          <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(s.expiresAt).toLocaleString()}</td>
-                        </tr>
-                      ))}
-                      {sessions.length === 0 && (
-                        <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>세션이 없습니다</td></tr>
-                      )}
+                          <td style={{ ...tdStyle, color: '#6b7280', textAlign: 'center' }}>{new Date(s.assignedAt).toLocaleString()}</td>
+                          <td style={{ ...tdStyle, color: '#6b7280', textAlign: 'center' }}>{new Date(s.expiresAt).toLocaleString()}</td>
+                          <td style={{ ...tdStyle, textAlign: 'center' }}>
+                            {s.status === 'ACTIVE' && (
+                              <button style={dangerActionBtnStyle} onClick={async () => {
+                                await fetch(`${API_BASE}/sessions/${s.id}/terminate`, { method: 'POST' });
+                                fetchData();
+                              }}>종료</button>
+                            )}
+                           </td>
+                         </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>
@@ -382,34 +421,73 @@ function App() {
             {tab === 'clients' && (
               <div style={cardStyle}>
                 <div style={cardHeaderStyle}>
-                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>클라이언트 ({clients.length})</h2>
+                  <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>클라이언트 ({clients.filter(c => c.status === 'CONNECTED').length})</h2>
+                  <button
+                    style={{ marginLeft: 'auto', padding: '4px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}
+                    onClick={() => setShowClientStatusInfo(!showClientStatusInfo)}
+                  >상태 설명</button>
                 </div>
+
+                {showClientStatusInfo && (
+                  <div style={{ padding: '12px 20px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 13, color: '#374151' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <strong style={{ fontSize: 14 }}>클라이언트 상태 설명</strong>
+                      <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#9ca3af', padding: 0 }} onClick={() => setShowClientStatusInfo(false)}>×</button>
+                    </div>
+                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                      <tbody>
+                        {Object.entries(clientStatusDescriptions).map(([key, desc]) => (
+                          <tr key={key}>
+                            <td style={{ padding: '4px 8px', width: 100 }}>
+                              <span style={badgeStyle(statusColor[key] || '#888')}>{statusLabel[key] || key}</span>
+                            </td>
+                            <td style={{ padding: '4px 8px', color: '#6b7280' }}>{desc}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
                 <table style={tableStyle}>
                   <thead>
                     <tr>
                       <th style={thStyle}>클라이언트 ID</th>
                       <th style={thStyle}>사용자</th>
                       <th style={thStyle}>상태</th>
+                      <th style={thStyle}>연결 시간</th>
+                      <th style={thStyle}>마지막 업데이트</th>
                       <th style={thStyle}>작업</th>
                     </tr>
                   </thead>
                   <tbody>
                     {clients.map(client => (
-                      <tr key={client.id} style={rowHoverStyle}>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{client.clientId}</td>
-                        <td style={tdStyle}>{client.userId ? client.userId.substring(0, 8) : '-'}</td>
-                        <td style={tdStyle}>
+                      <tr key={client.id} style={{ ...rowHoverStyle, opacity: client.status === 'DISCONNECTED' ? 0.5 : 1 }}>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', textAlign: 'center' }}>{client.clientId}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>{client.user?.username || '-'}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <span style={badgeStyle(statusColor[client.status] || '#888')}>
                             {statusLabel[client.status] || client.status}
                           </span>
                         </td>
-                        <td style={tdStyle}>
-                          <button style={btnStyle('#ef4444')} onClick={() => sendControl(client.clientId, 'DISCONNECT', 'client')}>연결 끊기</button>
+                        <td style={{ ...tdStyle, textAlign: 'center', fontSize: 12, color: '#6b7280' }}>{timeAgo(client.connectedAt)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center', fontSize: 12, color: '#6b7280' }}>{timeAgo(client.updatedAt)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
+                            {client.status === 'CONNECTED' && (
+                              <>
+                                <button style={actionBtnStyle} onClick={() => sendControl(client.clientId, 'PING', 'client')}>핑</button>
+                                <button style={actionBtnStyle} onClick={() => sendControl(client.clientId, 'RESTART', 'client')}>재시작</button>
+                              </>
+                            )}
+                            <button style={client.status === 'CONNECTED' ? dangerActionBtnStyle : disabledActionBtnStyle}
+                              onClick={() => sendControl(client.clientId, 'DISCONNECT', 'client')}>연결 끊기</button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                     {clients.length === 0 && (
-                      <tr><td colSpan={4} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>연결된 클라이언트가 없습니다</td></tr>
+                      <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>연결된 클라이언트가 없습니다</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -428,6 +506,7 @@ function App() {
                       <th style={thStyle}>이메일</th>
                       <th style={thStyle}>기관</th>
                       <th style={thStyle}>활성</th>
+                      <th style={thStyle}>관리자</th>
                       <th style={thStyle}>클라이언트</th>
                       <th style={thStyle}>가입일</th>
                     </tr>
@@ -435,10 +514,10 @@ function App() {
                   <tbody>
                     {users.map(user => (
                       <tr key={user.id} style={rowHoverStyle}>
-                        <td style={{ ...tdStyle, fontWeight: 600 }}>{user.username}</td>
-                        <td style={tdStyle}>{user.email || '-'}</td>
-                        <td style={tdStyle}>{user.orgName || '-'}</td>
-                        <td style={tdStyle}>
+                        <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'center' }}>{user.username}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>{user.email || '-'}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>{user.orgName || '-'}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
                           <button
                             style={toggleBtnStyle(user.active)}
                             onClick={async () => {
@@ -449,14 +528,25 @@ function App() {
                             {user.active ? '활성' : '비활성'}
                           </button>
                         </td>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#6b7280' }}>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <button
+                            style={adminToggleBtnStyle(user.admin)}
+                            onClick={async () => {
+                              await fetch(`${API_BASE}/users/${user.id}/toggle-admin`, { method: 'POST' });
+                              fetchData();
+                            }}
+                          >
+                            {user.admin ? '관리자' : '일반'}
+                          </button>
+                        </td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#6b7280', textAlign: 'center' }}>
                           {user.clientId ? `${user.clientId.substring(0, 16)}...` : '-'}
                         </td>
-                        <td style={{ ...tdStyle, color: '#6b7280' }}>{new Date(user.createdAt).toLocaleDateString()}</td>
+                        <td style={{ ...tdStyle, color: '#6b7280', textAlign: 'center' }}>{new Date(user.createdAt).toLocaleDateString()}</td>
                       </tr>
                     ))}
                     {users.length === 0 && (
-                      <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>등록된 사용자가 없습니다</td></tr>
+                      <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>등록된 사용자가 없습니다</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -473,7 +563,7 @@ const layoutStyle: React.CSSProperties = {
   display: 'flex',
   height: '100vh',
   background: '#f3f4f6',
-  fontFamily: "'Noto Sans KR', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+  fontFamily: "'NanumSquareRound', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
 };
 
 const sidebarStyle: React.CSSProperties = {
@@ -552,7 +642,7 @@ const tableStyle: React.CSSProperties = {
 };
 
 const thStyle: React.CSSProperties = {
-  textAlign: 'left',
+  textAlign: 'center',
   padding: '10px 20px',
   fontSize: 12,
   fontWeight: 600,
@@ -574,27 +664,41 @@ const rowHoverStyle: React.CSSProperties = {
 };
 
 const badgeStyle = (color: string): React.CSSProperties => ({
-  display: 'inline-block',
-  padding: '3px 10px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '6px 10px',
   borderRadius: 20,
   fontSize: 12,
   fontWeight: 600,
+  lineHeight: 1,
   color: '#fff',
   background: color,
 });
 
-const btnStyle = (color: string): React.CSSProperties => ({
+// (removed unused btnStyle)
+
+const actionBtnStyle: React.CSSProperties = {
   padding: '5px 12px',
-  border: 'none',
+  border: '1px solid #d1d5db',
   borderRadius: 6,
-  background: color,
-  color: '#fff',
+  background: '#fff',
+  color: '#374151',
   fontSize: 12,
   fontWeight: 500,
   cursor: 'pointer',
-  opacity: 0.9,
   transition: 'opacity 0.15s',
-});
+};
+
+const dangerActionBtnStyle: React.CSSProperties = {
+  ...actionBtnStyle,
+  color: '#ef4444',
+};
+
+const disabledActionBtnStyle: React.CSSProperties = {
+  ...actionBtnStyle,
+  color: '#9ca3af',
+  cursor: 'default',
+};
 
 const primaryBtnStyle: React.CSSProperties = {
   padding: '8px 20px',
@@ -624,6 +728,18 @@ const toggleBtnStyle = (active: boolean): React.CSSProperties => ({
   borderRadius: 20,
   background: active ? '#10b981' : '#ef4444',
   color: '#fff',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  minWidth: 60,
+});
+
+const adminToggleBtnStyle = (admin: boolean): React.CSSProperties => ({
+  padding: '4px 14px',
+  border: 'none',
+  borderRadius: 20,
+  background: admin ? '#8b5cf6' : '#e5e7eb',
+  color: admin ? '#fff' : '#6b7280',
   fontSize: 12,
   fontWeight: 600,
   cursor: 'pointer',
