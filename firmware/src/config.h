@@ -42,6 +42,11 @@
 
 #define STATUS_LED_PIN 8
 
+// Flash pins range on many ESP32-C3 modules (avoid using them for GPIO functions)
+#define FLASH_PIN_MIN 6
+#define FLASH_PIN_MAX 11
+#define IS_FLASH_PIN(p) ((p) >= FLASH_PIN_MIN && (p) <= FLASH_PIN_MAX)
+
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
 

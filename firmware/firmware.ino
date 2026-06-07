@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
-#include <NimBLEDevice.h>
 
 #include "src/config.h"
 #include "src/base64.hpp"
@@ -55,13 +54,27 @@ void onWsDisconnected() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  delay(100);
-  Serial.println();
-  Serial.println("[BOOT] Nexio firmware starting...");
+  // Initialize status LED only if it's not mapped to flash pins (GPIO6-11)
+  if (!IS_FLASH_PIN(STATUS_LED_PIN)) {
+    pinMode(STATUS_LED_PIN, OUTPUT);
 
-  pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, LOW);
+    // Blink fast at start to show booting
+    for (int i = 0; i < 20; i++) {
+      digitalWrite(STATUS_LED_PIN, (i % 2) ? HIGH : LOW);
+      delay(100);
+    }
+    digitalWrite(STATUS_LED_PIN, LOW);
+  } else {
+    Serial.println("[BOOT] STATUS_LED_PIN on flash pin; skipping LED init");
+  }
+
+  Serial.begin(115200);
+  delay(500);
+  Serial.println();
+  Serial.println("=======================================");
+  Serial.println("[BOOT] Nexio firmware starting...");
+  Serial.println("=======================================");
+  Serial.flush();
 
   initBLE();
 
@@ -90,7 +103,7 @@ void setup() {
 
   Serial.println("[BOOT] Starting BLE advertising...");
   startBLEAdvertising();
-  bleLog("[BOOT] BLE advertising started");
+  Serial.println("[BOOT] BLE advertising started (ok)");
 }
 
 void sendDiscardAck() {
@@ -101,9 +114,7 @@ void sendDiscardAck() {
   if (uniqueId.length() > 0) ackDoc["id"] = uniqueId;
   char output[256];
   serializeJson(ackDoc, output, sizeof(output));
-  if (ws.isConnected()) {
-    ws.send(output, strlen(output));
-  } else {
+  if (!ws.isConnected() || !ws.send(output, strlen(output))) {
     BoardResponse ackResp;
     httpBoardMessage(serverHost, serverPort, String(output), ackResp);
   }
@@ -201,8 +212,8 @@ void loop() {
     }
     pos += snprintf(output + pos, sizeof(output) - pos, "}");
 
-    if (ws.isConnected()) {
-      ws.send(output, strlen(output));
+    if (ws.isConnected() && ws.send(output, strlen(output))) {
+      // sent via WS
     } else {
       BoardResponse resp;
       if (httpBoardMessage(serverHost, serverPort, String(output), resp)) {
@@ -234,8 +245,8 @@ void loop() {
       int len = strlen(output);
       snprintf(output + len, sizeof(output) - len, "}");
 
-      if (ws.isConnected()) {
-        ws.send(output, strlen(output));
+      if (ws.isConnected() && ws.send(output, strlen(output))) {
+        // sent via WS
       } else {
         BoardResponse resp;
         if (httpBoardMessage(serverHost, serverPort, String(output), resp)) {
@@ -266,7 +277,8 @@ void loop() {
   }
 
   updateStatusFlags();
-  updateStatusLED();
+  // updateStatusLED uses the STATUS_LED_PIN; skip if it overlaps flash pins
+  if (!IS_FLASH_PIN(STATUS_LED_PIN)) updateStatusLED();
 
   if (blePendingAction.length() > 0) {
     String action = blePendingAction;
@@ -298,7 +310,7 @@ void updateStatusFlags() {
 void updateStatusLED() {
   unsigned long interval;
   if (productConnected) {
-    digitalWrite(STATUS_LED_PIN, LOW);
+    if (!IS_FLASH_PIN(STATUS_LED_PIN)) digitalWrite(STATUS_LED_PIN, LOW);
     return;
   } else if (registered) {
     interval = 1000;
@@ -309,7 +321,7 @@ void updateStatusLED() {
   if (now - lastLedToggle >= interval) {
     lastLedToggle = now;
     ledState = !ledState;
-    digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
+    if (!IS_FLASH_PIN(STATUS_LED_PIN)) digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
   }
 }
 
@@ -360,9 +372,7 @@ void sendDataToServer(const uint8_t* data, size_t len) {
     "\"payload\":\"%s\"}",
     MESSAGE_VERSION, millis(), uniqueId.c_str(), b64.c_str());
 
-  if (ws.isConnected()) {
-    ws.send(output, strlen(output));
-  } else {
+  if (!ws.isConnected() || !ws.send(output, strlen(output))) {
     BoardResponse resp;
     httpBoardMessage(serverHost, serverPort, String(output), resp);
   }
@@ -377,9 +387,7 @@ void sendLog(const String& level, const String& message) {
     "{\"type\":\"LOG\",\"version\":\"%s\",\"timestamp\":%lu,\"id\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}",
     MESSAGE_VERSION, millis(), uniqueId.c_str(), level.c_str(), message.c_str());
 
-  if (ws.isConnected()) {
-    ws.send(output, strlen(output));
-  } else {
+  if (!ws.isConnected() || !ws.send(output, strlen(output))) {
     BoardResponse resp;
     httpBoardMessage(serverHost, serverPort, String(output), resp);
   }
