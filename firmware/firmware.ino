@@ -71,12 +71,16 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
+  Serial.print("[BOOT] Free heap at start: ");
+  Serial.println(ESP.getFreeHeap());
   Serial.println("=======================================");
   Serial.println("[BOOT] Nexio firmware starting...");
   Serial.println("=======================================");
   Serial.flush();
 
   initBLE();
+  Serial.print("[BOOT] Free heap after initBLE: ");
+  Serial.println(ESP.getFreeHeap());
 
   if (loadConfig()) {
     bleLog("[BOOT] Config loaded");
@@ -84,6 +88,8 @@ void setup() {
     setBleUniqueId(uniqueId);
     onboarded = true;
     initUART();
+    Serial.print("[BOOT] Free heap after initUART: ");
+    Serial.println(ESP.getFreeHeap());
 
     String serverUrl = getServerUrl();
     int protocolStart = serverUrl.indexOf("://");
@@ -92,6 +98,8 @@ void setup() {
     serverPort = serverUrl.substring(portStart + 1).toInt();
 
     ws.begin(serverHost, serverPort);
+    Serial.print("[BOOT] Free heap after ws.begin: ");
+    Serial.println(ESP.getFreeHeap());
     ws.onMessage(onWsMessage);
     ws.onConnected(onWsConnected);
     ws.onDisconnected(onWsDisconnected);
@@ -201,7 +209,7 @@ void loop() {
     boardId[sizeof(boardId) - 1] = '\0';
     unsigned long ts = millis();
 
-    char output[512];
+    static char output[512];
     int pos = snprintf(output, sizeof(output),
       "{\"type\":\"REGISTER\",\"version\":\"%s\",\"timestamp\":%lu,\"boardId\":\"%s\","
       "\"firmwareVersion\":\"1.0.0\",\"displayAvailable\":false,\"productConnected\":%s",
@@ -365,7 +373,7 @@ void sendDataToServer(const uint8_t* data, size_t len) {
 
   std::string b64 = base64_encode(data, len);
 
-  char output[1536];
+  static char output[1024];
   snprintf(output, sizeof(output),
     "{\"type\":\"DATA_RELAY\",\"version\":\"%s\",\"timestamp\":%lu,"
     "\"sessionId\":\"\",\"sourceId\":\"%s\",\"direction\":\"B_TO_C\","
@@ -382,7 +390,7 @@ void sendDataToServer(const uint8_t* data, size_t len) {
 void sendLog(const String& level, const String& message) {
   if (!registered || uniqueId.length() == 0 || serverHost.length() == 0) return;
 
-  char output[768];
+  static char output[512];
   snprintf(output, sizeof(output),
     "{\"type\":\"LOG\",\"version\":\"%s\",\"timestamp\":%lu,\"id\":\"%s\",\"level\":\"%s\",\"message\":\"%s\"}",
     MESSAGE_VERSION, millis(), uniqueId.c_str(), level.c_str(), message.c_str());

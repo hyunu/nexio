@@ -147,7 +147,8 @@ private:
   }
 
   void _sendFrame(uint8_t opcode, const uint8_t* data, size_t len) {
-    uint8_t frame[2048];
+    // reduce frame buffer size to save RAM
+    uint8_t frame[512];
     size_t pos = 0;
 
     frame[pos++] = 0x80 | opcode;
@@ -206,7 +207,7 @@ private:
       }
     }
 
-    uint8_t buf[1024];
+    uint8_t buf[512];
     size_t readLen = 0;
     while (readLen < len) {
       size_t remaining = len - readLen;

@@ -9,6 +9,8 @@
 #define WS_OP_PING     0x9
 #define WS_OP_PONG     0xA
 
+#define WS_PING_INTERVAL 5000
+
 class BoardWebSocket {
 public:
   BoardWebSocket() {}
@@ -21,6 +23,7 @@ public:
     }
     _state = IDLE;
     _reconnectTimer = 0;
+    _lastPingTime = 0;
   }
 
   void loop() {
@@ -48,6 +51,7 @@ public:
           break;
         }
         _readFrames();
+        _keepAlive();
         break;
     }
   }
@@ -66,7 +70,12 @@ public:
   }
 
   bool isConnected() {
-    return _state == CONNECTED && _client.connected();
+    if (_state != CONNECTED) return false;
+    if (!_client.connected()) {
+      _resetConnection();
+      return false;
+    }
+    return true;
   }
 
   void disconnect() {
@@ -89,21 +98,25 @@ private:
   String _host;
   uint16_t _port = 0;
   unsigned long _reconnectTimer = 0;
+  unsigned long _lastPingTime = 0;
 
   void (*_onMessage)(const String&)      = nullptr;
   void (*_onConnected)()                 = nullptr;
   void (*_onDisconnected)()              = nullptr;
 
-  uint8_t _rxBuf[2048];
+  // Reduce large buffer sizes to save RAM on ESP32-C3
+  uint8_t _rxBuf[512];
   size_t  _rxLen = 0;
-  uint8_t _txBuf[2048];
+  uint8_t _txBuf[512];
 
   void _startConnect() {
     _client.stop();
     IPAddress ip;
     if (!ip.fromString(_host)) {
-      _scheduleReconnect();
-      return;
+      if (!WiFi.hostByName(_host.c_str(), ip)) {
+        _scheduleReconnect();
+        return;
+      }
     }
     _state = CONNECTING;
     if (!_client.connect(ip, _port, 5000)) {
@@ -112,6 +125,7 @@ private:
       return;
     }
     _client.setNoDelay(true);
+    _lastPingTime = millis();
     String key = "dGhlIHNhbXBsZSBub25jZQ==";
     String req = "GET /ws/board HTTP/1.1\r\n"
       "Host: " + _host + ":" + _port + "\r\n"
@@ -189,8 +203,9 @@ private:
       size_t totalFrameLen = headerLen + payloadLen;
       if (_rxLen < totalFrameLen) break;
 
-      char payload[1024];
-      size_t plLen = payloadLen > 1023 ? 1023 : payloadLen;
+      // use a smaller payload buffer to avoid large stack usage
+      char payload[512];
+      size_t plLen = payloadLen > 511 ? 511 : payloadLen;
       for (size_t i = 0; i < plLen; i++) {
         uint8_t byte = _rxBuf[headerLen + i];
         if (masked) byte ^= mask[i % 4];
@@ -209,11 +224,25 @@ private:
         return;
       } else if (opcode == WS_OP_PING) {
         _sendFrame(WS_OP_PONG, nullptr, 0);
+      } else if (opcode == WS_OP_PONG) {
+      }
+    }
+  }
+
+  void _keepAlive() {
+    if (millis() - _lastPingTime >= WS_PING_INTERVAL) {
+      _lastPingTime = millis();
+      if (!_sendFrame(WS_OP_PING, nullptr, 0)) {
+        _resetConnection();
       }
     }
   }
 
   bool _sendFrame(uint8_t opcode, const uint8_t* data, size_t len) {
+    if (!_client.connected()) {
+      _resetConnection();
+      return false;
+    }
     size_t pos = 0;
     _txBuf[pos++] = 0x80 | opcode;
 
@@ -242,7 +271,6 @@ private:
     }
 
     size_t wrote = _client.write(_txBuf, pos);
-    _client.flush();
     return wrote == pos;
   }
 
