@@ -8,8 +8,10 @@
 #define KEY_UNIQUE_ID "unique_id"
 
 #define UART_BAUD 115200
-#define UART_TX_PIN 7
-#define UART_RX_PIN 6
+// Avoid using flash-connected pins (typically 6-11 on ESP32-C3) for UART.
+// Default RX/TX moved off flash pins to prevent boot issues on small modules.
+#define UART_TX_PIN 4
+#define UART_RX_PIN 5
 
 #define PRODUCT_TIMEOUT_MS 30000
 #define PRODUCT_PROBE_INTERVAL_MS 10000

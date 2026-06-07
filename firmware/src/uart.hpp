@@ -7,6 +7,13 @@ static unsigned long lastProductRxTime = 0;
 static unsigned long lastProbeTime = 0;
 
 void initUART() {
+  // Avoid initializing Serial1 on pins that are connected to the onboard flash
+  // (typically GPIO6-GPIO11). Using those pins for peripherals can cause
+  // boot failures / continuous reboot loops on ESP32-C3 modules.
+  if ((UART_RX_PIN >= 6 && UART_RX_PIN <= 11) || (UART_TX_PIN >= 6 && UART_TX_PIN <= 11)) {
+    Serial.println("[UART] Warning: UART pins overlap flash pins; skipping Serial1 init to avoid boot issues");
+    return;
+  }
   Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 }
 
