@@ -4,11 +4,11 @@ import BoardConsole from './BoardConsole';
 // Use relative API path so front-end works when served from the same origin (Docker/container)
 const API_BASE = ((import.meta as any)?.env?.VITE_API_BASE as string) || '/api';
 
-const sidebarNav: { key: 'boards' | 'sessions' | 'clients' | 'users'; label: string; icon: string }[] = [
-  { key: 'boards', label: '보드', icon: '보드' },
-  { key: 'sessions', label: '세션', icon: '세션' },
-  { key: 'clients', label: '클라이언트', icon: '클라이언트' },
-  { key: 'users', label: '사용자', icon: '사용자' },
+const sidebarNav: { key: 'boards' | 'sessions' | 'clients' | 'users'; label: string; icon?: string }[] = [
+  { key: 'boards', label: '보드', icon: '' },
+  { key: 'sessions', label: '세션', icon: '' },
+  { key: 'clients', label: '클라이언트', icon: '' },
+  { key: 'users', label: '사용자', icon: '' },
 ];
 
 interface Board {
@@ -203,7 +203,7 @@ function App() {
                   style={navItemStyle(tab === item.key)}
                   onClick={() => setTab(item.key as typeof tab)}
                 >
-                  <span style={{ marginRight: 10 }}>{item.icon}</span>
+                  {item.icon ? <span style={{ marginRight: 10 }}>{item.icon}</span> : null}
                   {item.label}
                   {item.key === 'boards' && <span style={countStyle}>{boards.length}</span>}
                   {item.key === 'clients' && <span style={countStyle}>{clients.filter(c => c.status === 'CONNECTED').length}</span>}
