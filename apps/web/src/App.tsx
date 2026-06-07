@@ -46,12 +46,22 @@ interface User {
 
 const statusLabel: Record<string, string> = {
   IDLE: '대기', BUSY: '사용 중', OFFLINE: '오프라인',
+  DISCARDED: '폐기됨', CLAIMED: '할당됨',
   CONNECTED: '연결됨', DISCONNECTED: '연결 끊김',
 };
 
 const statusColor: Record<string, string> = {
   IDLE: '#10b981', BUSY: '#f59e0b', OFFLINE: '#ef4444',
+  DISCARDED: '#6b7280', CLAIMED: '#8b5cf6',
   CONNECTED: '#10b981', DISCONNECTED: '#ef4444',
+};
+
+const statusDescriptions: Record<string, string> = {
+  IDLE: '서버에 연결되어 있으며 세션을 기다리는 상태',
+  BUSY: '릴레이 모듈이 현재 세션에서 사용 중인 상태',
+  OFFLINE: '서버와 연결이 끊긴 상태 (타임아웃 또는 보드 재시작)',
+  DISCARDED: '공장 초기화되어 모든 설정이 지워진 상태. BLE로 새로 온보딩 필요',
+  CLAIMED: '폰에서 고유 ID를 할당받았으나 아직 REGISTER 메시지를 보내지 않음',
 };
 
 const sidebarNav = [
@@ -74,6 +84,7 @@ function App() {
   const [consoleBoard, setConsoleBoard] = useState<string | null>(null);
   const [editingLocation, setEditingLocation] = useState<Record<string, string>>({});
   const [savingLocation, setSavingLocation] = useState<Record<string, boolean>>({});
+  const [showStatusInfo, setShowStatusInfo] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -196,11 +207,38 @@ function App() {
                   <div style={cardStyle}>
                     <div style={cardHeaderStyle}>
                       <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>릴레이 모듈 ({boards.length})</h2>
+                      <button
+                        style={{ marginLeft: 'auto', padding: '4px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', fontSize: 12, color: '#6b7280', cursor: 'pointer' }}
+                        onClick={() => setShowStatusInfo(true)}
+                      >상태 설명</button>
                     </div>
+
+                    {showStatusInfo && (
+                      <div style={{ padding: '12px 20px', background: '#f9fafb', borderBottom: '1px solid #e5e7eb', fontSize: 13, color: '#374151' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <strong style={{ fontSize: 14 }}>릴레이 모듈 상태 설명</strong>
+                          <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#9ca3af', padding: 0 }} onClick={() => setShowStatusInfo(false)}>×</button>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <tbody>
+                            {Object.entries(statusDescriptions).map(([key, desc]) => (
+                              <tr key={key}>
+                                <td style={{ padding: '4px 8px', width: 100 }}>
+                                  <span style={badgeStyle(statusColor[key] || '#888')}>{statusLabel[key] || key}</span>
+                                </td>
+                                <td style={{ padding: '4px 8px', color: '#6b7280' }}>{desc}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
                     <table style={tableStyle}>
                       <thead>
                         <tr>
                           <th style={thStyle}>고유 ID</th>
+                          <th style={thStyle}>상태</th>
                           <th style={thStyle}>연결상태</th>
                           <th style={thStyle}>설치장소</th>
                           <th style={thStyle}>연결 시간</th>
@@ -209,14 +247,19 @@ function App() {
                       </thead>
                       <tbody>
                         {boards.map(board => (
-                          <tr key={board.id} style={rowHoverStyle}>
+                          <tr key={board.id} style={{ ...rowHoverStyle, opacity: board.status === 'DISCARDED' ? 0.5 : 1 }}>
                             <td style={tdStyle}>
                               <span style={{ fontFamily: 'monospace', fontWeight: 500 }}>{board.uniqueId}</span>
                             </td>
                             <td style={tdStyle}>
+                              <span style={badgeStyle(statusColor[board.status] || '#888')}>
+                                {statusLabel[board.status] || board.status}
+                              </span>
+                            </td>
+                            <td style={tdStyle}>
                               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <span style={badgeStyle(board.status === 'OFFLINE' || board.status === 'DISCONNECTED' ? '#9ca3af' : '#22c55e')}>
-                                  서버{board.status === 'OFFLINE' || board.status === 'DISCONNECTED' ? '✗' : '✓'}
+                                <span style={badgeStyle(board.status === 'OFFLINE' || board.status === 'DISCONNECTED' || board.status === 'DISCARDED' ? '#9ca3af' : '#22c55e')}>
+                                  서버{board.status === 'OFFLINE' || board.status === 'DISCONNECTED' || board.status === 'DISCARDED' ? '✗' : '✓'}
                                 </span>
                                 <span style={badgeStyle(board.productConnected ? '#22c55e' : '#9ca3af')}>
                                   제품{board.productConnected ? '✓' : '✗'}
@@ -250,15 +293,23 @@ function App() {
                             </td>
                             <td style={{ ...tdStyle, textAlign: 'right' }}>
                               <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                                <button style={btnStyle('#f59e0b')} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>재시작</button>
-                                <button style={btnStyle('#ef4444')} onClick={async () => { await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' }); fetchData(); }}>공장 초기화</button>
-                                <button style={btnStyle('#3b82f6')} onClick={() => setConsoleBoard(board.uniqueId)}>콘솔</button>
+                                {board.status !== 'DISCARDED' && (
+                                  <>
+                                    <button style={btnStyle('#f59e0b')} onClick={() => sendControl(board.uniqueId, 'RESET', 'board')}>재시작</button>
+                                    <button style={btnStyle('#3b82f6')} onClick={() => setConsoleBoard(board.uniqueId)}>콘솔</button>
+                                  </>
+                                )}
+                                <button style={btnStyle(board.status === 'DISCARDED' ? '#6b7280' : '#ef4444')} onClick={async () => {
+                                  if (board.status === 'DISCARDED') return;
+                                  await fetch(`${API_BASE}/boards/${board.uniqueId}/discard`, { method: 'POST' });
+                                  fetchData();
+                                }}>{board.status === 'DISCARDED' ? '삭제' : '공장 초기화'}</button>
                               </div>
                             </td>
                           </tr>
                         ))}
-                        {boards.length === 0 && (
-                          <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>연결된 릴레이 모듈이 없습니다</td></tr>
+                          {boards.length === 0 && (
+                          <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>릴레이 모듈이 없습니다</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -491,6 +542,8 @@ const cardStyle: React.CSSProperties = {
 const cardHeaderStyle: React.CSSProperties = {
   padding: '16px 20px',
   borderBottom: '1px solid #f3f4f6',
+  display: 'flex',
+  alignItems: 'center',
 };
 
 const tableStyle: React.CSSProperties = {

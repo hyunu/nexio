@@ -63,7 +63,6 @@ async function start() {
 
   fastify.get('/api/boards', async () => {
     const boards = await prisma.board.findMany({
-      where: { status: { not: 'DISCARDED' } },
       orderBy: { connectedAt: 'desc' },
     });
     return boards;
@@ -267,7 +266,7 @@ async function start() {
 
     const ackReceived = await waitForDiscardAck(id, 5000);
 
-    await prisma.board.delete({ where: { uniqueId: id } }).catch(() => {});
+    await prisma.board.update({ where: { uniqueId: id }, data: { status: 'DISCARDED' } }).catch(() => {});
     boardCommandQueues.delete(id);
     boardConnections.delete(id);
     clearHeartbeatTimer(id);
@@ -285,7 +284,7 @@ async function start() {
       return reply.status(404).send({ error: 'Board not found' });
     }
     const id = board.uniqueId;
-    await prisma.board.delete({ where: { id: board.id } }).catch(() => {});
+    await prisma.board.update({ where: { id: board.id }, data: { status: 'DISCARDED' } }).catch(() => {});
     boardCommandQueues.delete(id);
     boardConnections.delete(id);
     clearHeartbeatTimer(id);
@@ -352,21 +351,17 @@ async function start() {
       if (preAssignedId) {
         const claimed = await prisma.board.findUnique({ where: { uniqueId: preAssignedId } });
         if (claimed) {
-          if (claimed.status === 'DISCARDED') {
-            await prisma.board.delete({ where: { id: claimed.id } });
-          } else {
-            uniqueId = claimed.uniqueId;
-            await prisma.board.updateMany({
-              where: { macAddress: macAddr, NOT: { id: claimed.id } },
-              data: { macAddress: null },
-            });
-            await prisma.board.update({
-              where: { id: claimed.id },
-              data: { firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
-            });
-          }
+          uniqueId = claimed.uniqueId;
+          await prisma.board.updateMany({
+            where: { macAddress: macAddr, NOT: { id: claimed.id } },
+            data: { macAddress: null },
+          });
+          await prisma.board.update({
+            where: { id: claimed.id },
+            data: { macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: claimed.status === 'DISCARDED' ? 'IDLE' : claimed.status, connectedAt: new Date() },
+          });
         }
-        if (!claimed || claimed.status === 'DISCARDED') {
+        if (!claimed) {
           uniqueId = preAssignedId;
           await prisma.board.create({
             data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
@@ -375,17 +370,13 @@ async function start() {
       } else {
         const existingBoard = await prisma.board.findFirst({ where: { macAddress: macAddr } });
         if (existingBoard) {
-          if (existingBoard.status === 'DISCARDED') {
-            await prisma.board.delete({ where: { id: existingBoard.id } });
-          } else {
-            uniqueId = existingBoard.uniqueId;
-            await prisma.board.update({
-              where: { id: existingBoard.id },
-              data: { productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
-            });
-          }
+          uniqueId = existingBoard.uniqueId;
+          await prisma.board.update({
+            where: { id: existingBoard.id },
+            data: { macAddress: macAddr, productConnected: productConnected ?? false, status: existingBoard.status === 'DISCARDED' ? 'IDLE' : existingBoard.status, connectedAt: new Date() },
+          });
         }
-        if (!existingBoard || existingBoard.status === 'DISCARDED') {
+        if (!existingBoard) {
           const lastBoard = await prisma.board.findFirst({
             orderBy: { uniqueId: 'desc' },
             select: { uniqueId: true },
@@ -423,7 +414,7 @@ async function start() {
     if (type === 'DISCARD_ACK') {
       const boardId = id;
       if (boardId) {
-        await prisma.board.delete({ where: { uniqueId: boardId } }).catch(() => {});
+        await prisma.board.update({ where: { uniqueId: boardId }, data: { status: 'DISCARDED' } }).catch(() => {});
         boardCommandQueues.delete(boardId);
         boardConnections.delete(boardId);
         clearHeartbeatTimer(boardId);
@@ -665,27 +656,24 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
         where: { uniqueId: preAssignedId },
       });
       if (claimed) {
-        if (claimed.status === 'DISCARDED') {
-          await prisma.board.delete({ where: { id: claimed.id } });
-        } else {
-          uniqueId = claimed.uniqueId;
-          await prisma.board.updateMany({
-            where: { macAddress: boardId, NOT: { id: claimed.id } },
-            data: { macAddress: null },
-          });
-          await prisma.board.update({
-            where: { id: claimed.id },
-            data: {
-              firmwareVersion,
-              displayAvailable,
-              productConnected: productConnected ?? false,
-              status: 'IDLE',
-              connectedAt: new Date(),
-            },
-          });
-        }
+        uniqueId = claimed.uniqueId;
+        await prisma.board.updateMany({
+          where: { macAddress: boardId, NOT: { id: claimed.id } },
+          data: { macAddress: null },
+        });
+        await prisma.board.update({
+          where: { id: claimed.id },
+          data: {
+            macAddress: boardId,
+            firmwareVersion,
+            displayAvailable,
+            productConnected: productConnected ?? false,
+            status: claimed.status === 'DISCARDED' ? 'IDLE' : claimed.status,
+            connectedAt: new Date(),
+          },
+        });
       }
-      if (!claimed || claimed.status === 'DISCARDED') {
+      if (!claimed) {
         uniqueId = preAssignedId;
         await prisma.board.create({
           data: {
