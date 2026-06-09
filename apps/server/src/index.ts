@@ -694,12 +694,14 @@ async function start() {
     ws.on('close', async (code, reason) => {
       debugLog(`Board WS close: code=${code}, reason=${reason ? reason.toString() : 'none'}`);
       if (boardId) {
-        boardConnections.delete(boardId!);
-        clearHeartbeatTimer(boardId!);
-        await prisma.board.updateMany({
-          where: { uniqueId: boardId },
-          data: { status: 'OFFLINE' },
-        });
+        if (boardConnections.get(boardId!) === ws) {
+          boardConnections.delete(boardId!);
+          clearHeartbeatTimer(boardId!);
+          await prisma.board.updateMany({
+            where: { uniqueId: boardId },
+            data: { status: 'OFFLINE' },
+          });
+        }
       }
     });
   });

@@ -30,6 +30,8 @@ static const unsigned long WIFI_TIMEOUT_MS = 15000;
 static NimBLECharacteristic* pTxChar = nullptr;
 static WebSocketsClient gWs;
 static Preferences prefs;
+static bool gWsConnected = false;
+static unsigned long gWsConnectStart = 0;
 
 static void startBLEAdvertising();
 static void bleNotify(const char* msg);
@@ -203,12 +205,15 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       bleNotify("[WS] Connected");
+      gWsConnected = true;
+      gWsConnectStart = 0;
       gRegistered = false;
       gLastRegister = 0;
       break;
 
     case WStype_DISCONNECTED:
-      bleNotify("[WS] Disconnected");
+      if (gWsConnected) bleNotify("[WS] Disconnected");
+      gWsConnected = false;
       gRegistered = false;
       break;
 
@@ -247,7 +252,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
           if (gUniqueId[0]) p += snprintf(out + p, sizeof(out) - p, ",\"id\":\"%s\"", gUniqueId);
           snprintf(out + p, sizeof(out) - p, "}");
           gWs.sendTXT(out);
-          delay(100);
+  delay(5);
           prefs.begin("nexio", false);
           prefs.clear();
           prefs.end();
@@ -362,6 +367,9 @@ void loop() {
     if (gServerHost[0] && gServerPort > 0) {
       gWs.begin(gServerHost, gServerPort, "/ws/board");
       gWs.onEvent(wsEvent);
+      gWs.setReconnectInterval(2000);
+      gWsConnected = false;
+      gWsConnectStart = millis();
     }
   }
 
@@ -373,6 +381,8 @@ void loop() {
     gWifiAttemptTime = millis();
     updateStatusFlags();
     gWs.disconnect();
+    gWsConnected = false;
+    gWsConnectStart = 0;
   }
 
   // WiFi connection timeout / retry
@@ -388,8 +398,18 @@ void loop() {
     if (ssid.length() > 0) wifiConnect(ssid.c_str(), pass.c_str());
   }
 
+  // WebSocket reconnect watchdog
+  if (gWifiConnected && gServerHost[0] && !gWsConnected && gWsConnectStart > 0 && millis() - gWsConnectStart > 5000) {
+    bleNotify("[WS] Reconnecting...");
+    gWs.disconnect();
+    gWs.begin(gServerHost, gServerPort, "/ws/board");
+    gWs.onEvent(wsEvent);
+    gWs.setReconnectInterval(2000);
+    gWsConnectStart = millis();
+  }
+
   // REGISTER
-  if (gWifiConnected && !gRegistered && gServerHost[0] && millis() - gLastRegister > 3000) {
+  if (gWifiConnected && gWsConnected && !gRegistered && gServerHost[0] && millis() - gLastRegister > 3000) {
     gLastRegister = millis();
     sendRegister();
   }
@@ -406,5 +426,5 @@ void loop() {
   } else {
     digitalWrite(LED_PIN, LOW);
   }
-  delay(100);
+  delay(5);
 }
