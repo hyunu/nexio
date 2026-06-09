@@ -24,6 +24,7 @@ static bool gBleConnected = false;
 static bool gBleAdvertising = false;
 static bool gWifiAttempted = false;
 static unsigned long gWifiAttemptTime = 0;
+static volatile bool gPendingRestart = false;
 static const unsigned long WIFI_TIMEOUT_MS = 15000;
 
 static NimBLECharacteristic* pTxChar = nullptr;
@@ -69,12 +70,12 @@ class RxCb : public NimBLECharacteristicCallbacks {
           char buf[64];
           snprintf(buf, sizeof(buf), "[CMD] %s", act);
           bleNotify(buf);
-          if (strcmp(act, "RESET") == 0) ESP.restart();
+          if (strcmp(act, "RESET") == 0) gPendingRestart = true;
           else if (strcmp(act, "DISCARD") == 0) {
             prefs.begin("nexio", false);
             prefs.clear();
             prefs.end();
-            ESP.restart();
+            gPendingRestart = true;
           }
         }
       }
@@ -238,7 +239,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
       } else if (strcmp(type, "CONTROL") == 0) {
         const char* action = doc["action"];
         if (!action) return;
-        if (strcmp(action, "RESET") == 0) ESP.restart();
+        if (strcmp(action, "RESET") == 0) gPendingRestart = true;
         else if (strcmp(action, "DISCARD") == 0) {
           // Send DISCARD_ACK
           char out[256];
@@ -250,7 +251,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
           prefs.begin("nexio", false);
           prefs.clear();
           prefs.end();
-          ESP.restart();
+          gPendingRestart = true;
         }
       } else if (strcmp(type, "DATA_RELAY") == 0) {
         // Forward to UART if needed
@@ -328,7 +329,7 @@ void setup() {
 
   NimBLEService* svc = pServer->createService(SERVICE_UUID);
   pTxChar = svc->createCharacteristic(CHAR_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-  NimBLECharacteristic* pRxChar = svc->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE);
+  NimBLECharacteristic* pRxChar = svc->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pRxChar->setCallbacks(&_rxCb);
   svc->start();
 
@@ -338,6 +339,12 @@ void setup() {
 // ========== Loop ==========
 
 void loop() {
+  if (gPendingRestart) {
+    gPendingRestart = false;
+    delay(100);
+    ESP.restart();
+  }
+
   gWs.loop();
 
   // WiFi connected

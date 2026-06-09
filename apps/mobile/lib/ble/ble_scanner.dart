@@ -37,7 +37,7 @@ class BleScanner {
     }
 
     final mfgData = mfgMap[_mfgCompanyId];
-    if (mfgData == null || mfgData.length < 1) {
+    if (mfgData == null || mfgData.isEmpty) {
       return NexioDeviceState.unconfigured;
     }
 
@@ -95,7 +95,12 @@ class BleScanner {
           for (var characteristic in service.characteristics) {
             if (characteristic.uuid.str.toLowerCase() == _charWriteUuid.toLowerCase()) {
               String jsonString = '{"action":"$action"}';
-              await characteristic.write(jsonString.codeUnits);
+              try {
+                await characteristic.write(jsonString.codeUnits);
+              } catch (_) {
+                // Board may restart before sending write response (RESET/DISCARD).
+                // Command was already transmitted — treat as success.
+              }
               return true;
             }
           }
