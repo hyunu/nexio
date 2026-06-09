@@ -2,6 +2,7 @@
   "private": true,
   "workspaces": [
     "packages/shared-types",
-    "apps/server"
+    "apps/server",
+    "apps/web"
   ]
 }

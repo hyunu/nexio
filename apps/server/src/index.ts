@@ -83,6 +83,16 @@ async function start() {
 
   fastify.get('/api/health', async () => ({ status: 'ok', timestamp: Date.now() }));
 
+  fastify.post('/api/echo', async (request: any, reply: any) => {
+    return {
+      method: 'POST',
+      path: '/api/echo',
+      body: request.body,
+      query: request.query,
+      timestamp: Date.now(),
+    };
+  });
+
   fastify.get('/api/boards', async () => {
     const boards = await prisma.board.findMany({
       orderBy: { connectedAt: 'desc' },
@@ -442,7 +452,7 @@ async function start() {
           });
           await prisma.board.update({
             where: { id: claimed.id },
-            data: { macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: claimed.status === 'DISCARDED' ? 'IDLE' : claimed.status, connectedAt: new Date() },
+            data: { firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
           });
         }
         if (!claimed) {
@@ -457,7 +467,7 @@ async function start() {
           uniqueId = existingBoard.uniqueId;
           await prisma.board.update({
             where: { id: existingBoard.id },
-            data: { macAddress: macAddr, productConnected: productConnected ?? false, status: existingBoard.status === 'DISCARDED' ? 'IDLE' : existingBoard.status, connectedAt: new Date() },
+            data: { macAddress: macAddr, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
           });
         }
         if (!existingBoard) {
@@ -759,11 +769,10 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
         await prisma.board.update({
           where: { id: claimed.id },
           data: {
-            macAddress: boardId,
             firmwareVersion,
             displayAvailable,
             productConnected: productConnected ?? false,
-            status: claimed.status === 'DISCARDED' ? 'IDLE' : claimed.status,
+            status: 'IDLE',
             connectedAt: new Date(),
           },
         });

@@ -8,8 +8,6 @@
 #define KEY_UNIQUE_ID "unique_id"
 
 #define UART_BAUD 115200
-// Avoid using flash-connected pins (typically 6-11 on ESP32-C3) for UART.
-// Default RX/TX moved off flash pins to prevent boot issues on small modules.
 #define UART_TX_PIN 4
 #define UART_RX_PIN 5
 
@@ -29,26 +27,27 @@
 
 #define WS_RECONNECT_INTERVAL 5000
 #define WIFI_RECONNECT_INTERVAL 3000
-#define HEARTBEAT_INTERVAL 3000
+#define HEARTBEAT_INTERVAL 30000
 
 #define MESSAGE_VERSION "1.0"
 
-#define DISPLAY_CS_PIN -1   // disabled by default to avoid using flash pins
-#define DISPLAY_DC_PIN -1
-#define DISPLAY_RST_PIN -1
-#define DISPLAY_SCK_PIN -1
-#define DISPLAY_MOSI_PIN -1
-#define DISPLAY_MISO_PIN -1
-
-// Use a safe GPIO for status LED (avoid flash pins 6..11). GPIO2 is typically safe.
 #define STATUS_LED_PIN 2
 
-// Flash pins range on many ESP32-C3 modules (avoid using them for GPIO functions)
 #define FLASH_PIN_MIN 6
 #define FLASH_PIN_MAX 11
 #define IS_FLASH_PIN(p) ((p) >= FLASH_PIN_MIN && (p) <= FLASH_PIN_MAX)
 
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
+
+// Buffer sizes for memory safety
+#define BUF_UNIQUE_ID 32
+#define BUF_HOST 64
+#define BUF_SSID 64
+#define BUF_MSG 128
+#define BUF_WS_RX 512
+#define BUF_JSON_OUT 384
+#define BUF_JSON_LARGE 768
+#define BUF_LOG 64
 
 #endif

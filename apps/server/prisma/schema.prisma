@@ -29,8 +29,10 @@ model User {
   email     String?
   orgName   String?
   active    Boolean  @default(true)
+  admin     Boolean  @default(false)
   token     String?  @unique
   clientId  String?  @unique
+  clients   Client[]
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
@@ -39,6 +41,7 @@ model Client {
   id           String    @id @default(uuid())
   clientId     String    @unique
   userId       String?
+  user         User?     @relation(fields: [userId], references: [id])
   status       String    @default("DISCONNECTED")
   connectedAt  DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
