@@ -1,6 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_reset_reason.h>
+
+RTC_DATA_ATTR int bootCount = 0;
+RTC_DATA_ATTR int lastResetReason = 0;
 
 #include "src/config.h"
 #include "src/base64.hpp"
@@ -29,6 +33,10 @@ bool ledState = false;
 bool rfidConnected = false;
 bool lastProductConnected = false;
 
+// Heap monitoring
+static unsigned long lastHeapLog = 0;
+static int heapLowWatermark = INT_MAX;
+
 BoardWebSocket ws;
 String wsLastMessage = "";
 bool wsMessageReceived = false;
@@ -53,12 +61,85 @@ void onWsDisconnected() {
   bleLog("[WS] Disconnected");
 }
 
+static const char* resetReasonStr(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_UNKNOWN:    return "UNKNOWN";
+    case ESP_RST_POWERON:    return "POWERON";
+    case ESP_RST_EXT:        return "EXT_PIN";
+    case ESP_RST_SW:         return "SOFTWARE (ESP.restart)";
+    case ESP_RST_PANIC:      return "PANIC/CRASH";
+    case ESP_RST_INT_WDT:    return "INTERRUPT_WDT";
+    case ESP_RST_TASK_WDT:   return "TASK_WDT";
+    case ESP_RST_WDT:        return "OTHER_WDT";
+    case ESP_RST_DEEPSLEEP:  return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:   return "BROWNOUT";
+    case ESP_RST_SDIO:       return "SDIO";
+    default:                 return "???";
+  }
+}
+
+static void printHeap(const char* label) {
+  Serial.print(label);
+  Serial.print(" free=");
+  Serial.print(ESP.getFreeHeap());
+  Serial.print(" maxBlock=");
+  Serial.println(ESP.getMaxAllocHeap());
+  Serial.flush();
+}
+
 void setup() {
-  // Initialize status LED only if it's not mapped to flash pins (GPIO6-11)
+  bootCount++;
+  esp_reset_reason_t reason = esp_reset_reason();
+  if (reason == ESP_RST_PANIC || reason == ESP_RST_TASK_WDT) {
+    lastResetReason = reason;
+  }
+
+  Serial.begin(115200);
+  delay(500);
+
+  Serial.println();
+  Serial.println("=======================================");
+  Serial.println("[BOOT] Nexio firmware starting...");
+  Serial.println("=======================================");
+  Serial.print("[BOOT] bootCount=");
+  Serial.print(bootCount);
+  Serial.print(" reason=");
+  Serial.print(resetReasonStr(reason));
+  if (lastResetReason > 0) {
+    Serial.print(" lastCrash=");
+    Serial.print(resetReasonStr((esp_reset_reason_t)lastResetReason));
+  }
+  Serial.println();
+
+  if (reason == ESP_RST_BROWNOUT) {
+    Serial.println("[BOOT] *** BROWNOUT detected! Check USB power supply. ***");
+  }
+  if (reason == ESP_RST_PANIC || reason == ESP_RST_TASK_WDT) {
+    Serial.println("[BOOT] *** Previous crash/WDT detected! Likely memory or stack issue. ***");
+  }
+  if (reason == ESP_RST_POWERON || reason == ESP_RST_EXT) {
+    bootCount = 1;
+  }
+  if (bootCount >= 3) {
+    Serial.print("[BOOT] *** Boot loop detected (count=");
+    Serial.print(bootCount);
+    Serial.println("). Delaying 30s for debug...");
+    for (int i = 30; i > 0; i--) {
+      Serial.print("[BOOT] "); Serial.println(i);
+      delay(1000);
+    }
+  }
+
+  Serial.print("[BOOT] Chip model: "); Serial.println(ESP.getChipModel());
+  Serial.print("[BOOT] CPU freq: "); Serial.print(ESP.getCpuFreqMHz()); Serial.println(" MHz");
+  Serial.print("[BOOT] Flash size: "); Serial.print(ESP.getFlashChipSize() / 1024); Serial.println(" KB");
+  printHeap("[BOOT] Heap at start");
+
+  esp_brownout_disable();
+
+  // LED init (must happen after Serial for flash-pin safety check)
   if (!IS_FLASH_PIN(STATUS_LED_PIN)) {
     pinMode(STATUS_LED_PIN, OUTPUT);
-
-    // Blink fast at start to show booting
     for (int i = 0; i < 20; i++) {
       digitalWrite(STATUS_LED_PIN, (i % 2) ? HIGH : LOW);
       delay(100);
@@ -68,19 +149,11 @@ void setup() {
     Serial.println("[BOOT] STATUS_LED_PIN on flash pin; skipping LED init");
   }
 
-  Serial.begin(115200);
-  delay(500);
-  Serial.println();
-  Serial.print("[BOOT] Free heap at start: ");
-  Serial.println(ESP.getFreeHeap());
-  Serial.println("=======================================");
-  Serial.println("[BOOT] Nexio firmware starting...");
-  Serial.println("=======================================");
-  Serial.flush();
-
+  unsigned long t0 = millis();
   initBLE();
-  Serial.print("[BOOT] Free heap after initBLE: ");
-  Serial.println(ESP.getFreeHeap());
+  unsigned long t1 = millis();
+  Serial.print("[BOOT] initBLE took "); Serial.print(t1 - t0); Serial.println(" ms");
+  printHeap("[BOOT] After initBLE");
 
   if (loadConfig()) {
     bleLog("[BOOT] Config loaded");
@@ -88,8 +161,7 @@ void setup() {
     setBleUniqueId(uniqueId);
     onboarded = true;
     initUART();
-    Serial.print("[BOOT] Free heap after initUART: ");
-    Serial.println(ESP.getFreeHeap());
+    printHeap("[BOOT] After initUART");
 
     String serverUrl = getServerUrl();
     int protocolStart = serverUrl.indexOf("://");
@@ -98,8 +170,7 @@ void setup() {
     serverPort = serverUrl.substring(portStart + 1).toInt();
 
     ws.begin(serverHost, serverPort);
-    Serial.print("[BOOT] Free heap after ws.begin: ");
-    Serial.println(ESP.getFreeHeap());
+    printHeap("[BOOT] After ws.begin");
     ws.onMessage(onWsMessage);
     ws.onConnected(onWsConnected);
     ws.onDisconnected(onWsDisconnected);
@@ -112,6 +183,7 @@ void setup() {
   Serial.println("[BOOT] Starting BLE advertising...");
   startBLEAdvertising();
   Serial.println("[BOOT] BLE advertising started (ok)");
+  printHeap("[BOOT] End of setup");
 }
 
 void sendDiscardAck() {
@@ -169,6 +241,21 @@ void processWsMessage(const String& msg) {
 }
 
 void loop() {
+  int freeHeap = ESP.getFreeHeap();
+  if (freeHeap < heapLowWatermark) {
+    heapLowWatermark = freeHeap;
+  }
+  if (freeHeap < 50000 && millis() - lastHeapLog > 30000) {
+    lastHeapLog = millis();
+    Serial.print("[HEAP_WARN] free=");
+    Serial.print(freeHeap);
+    Serial.print(" low=");
+    Serial.print(heapLowWatermark);
+    Serial.print(" maxBlock=");
+    Serial.println(ESP.getMaxAllocHeap());
+    Serial.flush();
+  }
+
   handleBLE();
   handleUART();
 

@@ -169,21 +169,21 @@ void initBLE() {
   esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
   err = esp_bt_controller_init(&bt_cfg);
   if (err != ESP_OK) {
-    Serial.printf("FAIL (%d)\n", err); Serial.flush();
-    while (1) { delay(500); }
+    Serial.printf("FAIL (%d), continuing without BLE\n", err); Serial.flush();
+    return;
   }
   err = esp_bt_controller_enable(ESP_BT_MODE_BLE);
   if (err != ESP_OK) {
-    Serial.printf("FAIL enable (%d)\n", err); Serial.flush();
-    while (1) { delay(500); }
+    Serial.printf("FAIL enable (%d), continuing without BLE\n", err); Serial.flush();
+    return;
   }
   Serial.println("OK"); Serial.flush();
 
   Serial.print("[BLE] NimBLE init... "); Serial.flush();
   err = esp_nimble_init();
   if (err != ESP_OK) {
-    Serial.printf("FAIL (%d)\n", err); Serial.flush();
-    while (1) { delay(500); }
+    Serial.printf("FAIL (%d), continuing without BLE\n", err); Serial.flush();
+    return;
   }
   Serial.println("OK"); Serial.flush();
 
@@ -224,7 +224,9 @@ void bleLog(const String& msg) {
   if (conn_handle == BLE_HS_CONN_HANDLE_NONE || gatt_chr_tx_handle == 0) return;
   struct os_mbuf *om = ble_hs_mbuf_from_flat(msg.c_str(), msg.length());
   if (om == NULL) return;
-  ble_gattc_notify_custom(conn_handle, gatt_chr_tx_handle, om);
+  if (ble_gattc_notify_custom(conn_handle, gatt_chr_tx_handle, om) != 0) {
+    os_mbuf_free_chain(om);
+  }
   Serial.print("[BLE_TX] "); Serial.println(msg);
 }
 

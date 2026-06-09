@@ -104,10 +104,9 @@ private:
   void (*_onConnected)()                 = nullptr;
   void (*_onDisconnected)()              = nullptr;
 
-  // Reduce large buffer sizes to save RAM on ESP32-C3
-  uint8_t _rxBuf[512];
+  uint8_t _rxBuf[1024];
   size_t  _rxLen = 0;
-  uint8_t _txBuf[512];
+  uint8_t _txBuf[1536];
 
   void _startConnect() {
     _client.stop();
@@ -243,6 +242,16 @@ private:
       _resetConnection();
       return false;
     }
+
+    size_t headerLen = 2;
+    if (len >= 126 && len < 65536) headerLen += 2;
+    else if (len >= 65536) headerLen += 8;
+    headerLen += 4;
+
+    if (headerLen + len > sizeof(_txBuf)) {
+      return false;
+    }
+
     size_t pos = 0;
     _txBuf[pos++] = 0x80 | opcode;
 
@@ -266,7 +275,7 @@ private:
     _txBuf[pos++] = mask[2];
     _txBuf[pos++] = mask[3];
 
-    for (size_t i = 0; i < len && pos < sizeof(_txBuf); i++) {
+    for (size_t i = 0; i < len; i++) {
       _txBuf[pos++] = data[i] ^ mask[i % 4];
     }
 
