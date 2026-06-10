@@ -44,6 +44,7 @@ static uint8_t        gStatusFlags        = 0;             // BLE mfg data 비�
 static bool           gWifiConnected      = false;         // Wi-Fi 링크 연결됨
 static bool           gWifiAttempted      = false;         // Wi-Fi.begin() 호출됨
 static unsigned long  gWifiAttemptTime    = 0;             // 마지막 Wi-Fi 연결 시도 시각
+static unsigned long  gWifiRetryCooldown  = 0;             // 재시도 금지 시각 (타임아웃 후 30초)
 static bool           gRegistered         = false;         // 서버가 ASSIGN_ID 전송 완료
 static bool           gBleConnected       = false;         // BLE 링크 연결됨
 static bool           gBleAdvertising     = false;         // BLE 광고 중
@@ -595,10 +596,12 @@ void loop() {
   // Wi-Fi: 타임아웃 / 재시도 ─────────────────────────────────────────
   if (!gWifiConnected && gWifiAttempted &&
       millis() - gWifiAttemptTime > WIFI_TIMEOUT_MS) {
-    gWifiAttempted = false;
-    bleNotify("[WIFI] Connection failed (timeout)");
+    gWifiAttempted     = false;
+    gWifiRetryCooldown = millis() + 30000;
+    bleNotify("[WIFI] Connection failed (timeout) — retry in 30s");
   }
-  if (!gWifiConnected && !gWifiAttempted && gOnboarded) {
+  if (!gWifiConnected && !gWifiAttempted && gOnboarded &&
+      millis() > gWifiRetryCooldown) {
     prefs.begin("nexio", true);
     String ssid = prefs.getString("ssid", "");
     String pass = prefs.getString("pass", "");

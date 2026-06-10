@@ -182,6 +182,7 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 | `gWifiConnected` | `bool` | `false` | Wi-Fi 연결 상태 |
 | `gWifiAttempted` | `bool` | `false` | `WiFi.begin()` 호출 여부 |
 | `gWifiAttemptTime` | `unsigned long` | `0` | 마지막 Wi-Fi 연결 시도 시각 (ms) |
+| `gWifiRetryCooldown` | `unsigned long` | `0` | 타임아웃 후 재시도 금지 시각. 30초 쿨다운 |
 | `gRegistered` | `bool` | `false` | 서버 ASSIGN_ID 수신 완료 |
 | `gBleConnected` | `bool` | `false` | BLE 링크 연결 상태 |
 | `gBleAdvertising` | `bool` | `false` | BLE 광고 중 |
@@ -708,7 +709,7 @@ Namespace: `"nexio"`
 
 | 장애 | 감지 조건 | 복구 동작 |
 |------|----------|-----------|
-| Wi-Fi 연결 실패 | `millis() - gWifiAttemptTime > 15000` | 타임아웃 후 NVS에서 재시도 |
+| Wi-Fi 연결 실패 | `millis() - gWifiAttemptTime > 15000` | 타임아웃 후 30초 쿨다운, 이후 NVS에서 재시도 |
 | Wi-Fi 연결 끊김 | `WiFi.status() != WL_CONNECTED` | 자동 재연결 시도 |
 | WS 연결 실패 | `gWsConnectStart > 0 && 경과 > 5000` | `gWs.begin()` 재호출 |
 | WS 연결 끊김 | `WStype_DISCONNECTED` | 다음 루프에서 재연결 |
