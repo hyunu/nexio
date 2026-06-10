@@ -206,8 +206,12 @@ class RxCb : public NimBLECharacteristicCallbacks {
       gWifiRetryDone  = false;
       updateStatusFlags();
 
-      // 이미 같은 SSID로 Wi-Fi 연결 중이면 생략
-      if (WiFi.status() != WL_CONNECTED || strcmp(WiFi.SSID().c_str(), ssid) != 0)
+      // 이미 연결되었거나 같은 SSID로 시도 중이면 추가 wifiConnect() 생략
+      bool alreadyConnected = (WiFi.status() == WL_CONNECTED &&
+                               strcmp(WiFi.SSID().c_str(), ssid) == 0);
+      bool alreadyTrying    = (gWifiAttempted &&
+                               strcmp(WiFi.SSID().c_str(), ssid) == 0);
+      if (!alreadyConnected && !alreadyTrying)
         wifiConnect(ssid, pass);
     }
   }
@@ -286,8 +290,14 @@ static void updateStatusFlags() {
 // wifiConnect: Wi-Fi 연결 시작
 //-----------------------------------------------------------------------------
 static void wifiConnect(const char* ssid, const char* pass) {
+  // WiFi 스택이 사용 중이면 완료될 때까지 대기 ("cannot set config" 방지)
+  for (int i = 0; i < 50; ++i) {
+    if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_DISCONNECTED)
+      break;
+    delay(100);
+  }
   WiFi.disconnect(true);
-  delay(300);                            // 이전 연결 완전 정리 대기
+  delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
   gWifiAttempted   = true;
@@ -505,6 +515,9 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(PRODUCT_UART_BAUD, SERIAL_8N1, PRODUCT_UART_RX, PRODUCT_UART_TX);
   pinMode(LED_PIN, OUTPUT);
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
 
   // 저장된 설정 복원 ──────────────────────────────────────────────────
   prefs.begin("nexio", true);
