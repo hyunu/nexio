@@ -367,7 +367,6 @@ void loop() {
     if (gServerHost[0] && gServerPort > 0) {
       gWs.begin(gServerHost, gServerPort, "/ws/board");
       gWs.onEvent(wsEvent);
-      gWs.setReconnectInterval(2000);
       gWsConnected = false;
       gWsConnectStart = millis();
     }
@@ -398,13 +397,13 @@ void loop() {
     if (ssid.length() > 0) wifiConnect(ssid.c_str(), pass.c_str());
   }
 
-  // WebSocket reconnect watchdog
+  // WebSocket reconnect watchdog (fires only if WS stays disconnected > 5s)
   if (gWifiConnected && gServerHost[0] && !gWsConnected && gWsConnectStart > 0 && millis() - gWsConnectStart > 5000) {
     bleNotify("[WS] Reconnecting...");
     gWs.disconnect();
+    delay(50);
     gWs.begin(gServerHost, gServerPort, "/ws/board");
     gWs.onEvent(wsEvent);
-    gWs.setReconnectInterval(2000);
     gWsConnectStart = millis();
   }
 
@@ -426,5 +425,5 @@ void loop() {
   } else {
     digitalWrite(LED_PIN, LOW);
   }
-  delay(5);
+  delay(100);
 }
