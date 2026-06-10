@@ -137,7 +137,10 @@ class RxCb : public NimBLECharacteristicCallbacks {
       gOnboarded = true;
       updateStatusFlags();
 
-      wifiConnect(ssid, pass);
+      // Skip WiFi connect if already connected to the same SSID
+      if (WiFi.status() != WL_CONNECTED || strcmp(WiFi.SSID().c_str(), ssid) != 0) {
+        wifiConnect(ssid, pass);
+      }
     }
   }
 };
@@ -170,7 +173,7 @@ static void startBLEAdvertising() {
   adv->setManufacturerData(mfg, 5);
   adv->start();
   gBleAdvertising = true;
-  bleNotify("[BOOT] BLE advertising started");
+  bleNotify("[BLE] Advertising started");
 }
 
 static void updateStatusFlags() {
