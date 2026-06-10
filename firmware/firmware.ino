@@ -1,3 +1,14 @@
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [1] 전방부 — Includes, Macros, 전역 변수, 전방 선언
+//
+//
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <WiFi.h>
@@ -6,62 +17,71 @@
 #include <Preferences.h>
 
 #define LED_PIN              8
-#define WIFI_TIMEOUT_MS  15000
+#define WIFI_TIMEOUT_MS      15000
 
-// ── Product UART (Serial1) ──────────────────────────────────────────
+// ── 제품 UART (Serial1) ──────────────────────────────────────────────
 #define PRODUCT_UART_TX      21
 #define PRODUCT_UART_RX      20
-#define PRODUCT_UART_BAUD 115200
+#define PRODUCT_UART_BAUD    115200
 
-// ── UART RX ring buffer ───────────────────────────────────────────
-static const size_t UART_BUF_SIZE    = 1024;          // ring buffer capacity (bytes)
-static       uint8_t  uartRing[UART_BUF_SIZE];        // ring buffer storage
-static       size_t   uartHead       = 0;              // next write index (producer)
-static       size_t   uartTail       = 0;              // next read  index (consumer)
+// ── UART RX 링 버퍼 ──────────────────────────────────────────────────
+static const size_t  UART_BUF_SIZE    = 1024;             // 버퍼 크기 (bytes)
+static       uint8_t uartRing[UART_BUF_SIZE];             // 링 버퍼 저장소
+static       size_t  uartHead         = 0;                // 다음 쓰기 위치 (생산자)
+static       size_t  uartTail         = 0;                // 다음 읽기 위치 (소비자)
 
-// ── BLE GATT UUIDs ────────────────────────────────────────────────
+// ── BLE GATT UUID ────────────────────────────────────────────────────
 static const char* SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-static const char* CHAR_TX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // ← board → phone (notify)
-static const char* CHAR_RX_UUID  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // ← phone → board  (write)
+static const char* CHAR_TX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // 보드 → 폰 (notify)
+static const char* CHAR_RX_UUID  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // 폰 → 보드 (write)
 
-// ── Onboarding / connection state ─────────────────────────────────
-static char    gUniqueId[32]       = {0};              // assigned by server (e.g. "0042")
-static char    gServerHost[64]     = {0};              // parsed WS host (no port)
-static uint16_t gServerPort         = 0;                // parsed WS port
-static bool    gOnboarded          = false;             // has Wi-Fi config stored in NVS
-static uint8_t gStatusFlags        = 0;                 // bitmask for BLE mfg data
-static bool    gWifiConnected      = false;             // Wi-Fi link up
-static bool    gWifiAttempted      = false;             // Wi-Fi.begin() called
-static unsigned long gWifiAttemptTime = 0;               // timestamp of last Wi-Fi attempt
-static bool    gRegistered         = false;             // server has sent ASSIGN_ID
-static bool    gBleConnected       = false;             // BLE link up
-static bool    gBleAdvertising     = false;             // BLE advertisement active
-static volatile bool  gPendingRestart = false;           // set by RESET/DISCARD, consumed in loop()
+// ── 온보딩 / 연결 상태 ──────────────────────────────────────────────
+static char           gUniqueId[32]       = {0};           // 서버가 할당한 ID (예: "0042")
+static char           gServerHost[64]     = {0};           // 파싱된 WS 호스트 (포트 제외)
+static uint16_t       gServerPort         = 0;             // 파싱된 WS 포트
+static bool           gOnboarded          = false;         // NVS에 Wi-Fi 설정 보관 중
+static uint8_t        gStatusFlags        = 0;             // BLE mfg data 비트마스크
+static bool           gWifiConnected      = false;         // Wi-Fi 링크 연결됨
+static bool           gWifiAttempted      = false;         // Wi-Fi.begin() 호출됨
+static unsigned long  gWifiAttemptTime    = 0;             // 마지막 Wi-Fi 연결 시도 시각
+static bool           gRegistered         = false;         // 서버가 ASSIGN_ID 전송 완료
+static bool           gBleConnected       = false;         // BLE 링크 연결됨
+static bool           gBleAdvertising     = false;         // BLE 광고 중
+static volatile bool  gPendingRestart     = false;         // RESET/DISCARD → loop()에서 소비
 
-// ── WebSocket state ───────────────────────────────────────────────
-static bool    gWsConnected       = false;              // WS link up
-static unsigned long gWsConnectStart = 0;                // millis() when gWs.begin() was called
+// ── WebSocket 상태 ──────────────────────────────────────────────────
+static bool           gWsConnected       = false;          // WS 링크 연결됨
+static unsigned long  gWsConnectStart    = 0;              // gWs.begin() 호출 시각 (ms)
 
-// ── Handles ───────────────────────────────────────────────────────
-static NimBLECharacteristic* pTxChar  = nullptr;        // BLE notify characteristic
-static WebSocketsClient      gWs;                        // WS client instance
-static Preferences            prefs;                      // NVS (preferences) handle
+// ── 핸들 ────────────────────────────────────────────────────────────
+static NimBLECharacteristic*  pTxChar  = nullptr;          // BLE notify 특성
+static WebSocketsClient       gWs;                          // WS 클라이언트 인스턴스
+static Preferences            prefs;                        // NVS 핸들
 
-// ── Throttle timestamps ───────────────────────────────────────────
-static unsigned long gLastServerMsg  = 0;                // last HEARTBEAT from server
-static unsigned long gLastRegister   = 0;                // last REGISTER sent
+// ── 주기 타이머 ─────────────────────────────────────────────────────
+static unsigned long  gLastServerMsg  = 0;                 // 마지막 서버 HEARTBEAT 수신 시각
+static unsigned long  gLastRegister   = 0;                 // 마지막 REGISTER 전송 시각
 
-// ── Forward declarations ────────────────────────────────────────────
+// ── 전방 선언 ──────────────────────────────────────────────────────
 static void startBLEAdvertising();
 static void bleNotify(const char* msg);
 static void updateStatusFlags();
 static void wifiConnect(const char* ssid, const char* pass);
 static void wsToUart(const char* payload, size_t len);
 
-// ══════════════════════════════════════════════════════════════════════
-//  BLE Callbacks
-// ══════════════════════════════════════════════════════════════════════
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [2] BLE   — NimBLE 서버/콜백, 알림, 광고, 상태 플래그 
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+// SvrCb: BLE 서버 접속/해제 콜백
+//-----------------------------------------------------------------------------
 class SvrCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
     Serial.println("[BLE] Connected");
@@ -74,13 +94,18 @@ class SvrCb : public NimBLEServerCallbacks {
   }
 };
 
+//-----------------------------------------------------------------------------
+// RxCb: BLE 쓰기 콜백 (모바일 앱 → 보드)
+// action:   RESET / DISCARD
+// config:   ssid + password + serverUrl + uniqueId
+//-----------------------------------------------------------------------------
 class RxCb : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pc, NimBLEConnInfo&) override {
     std::string val = pc->getValue();
     Serial.printf("[BLE_RX] %s\n", val.c_str());
     const char* d = val.c_str();
 
-    // ── Action (RESET / DISCARD) ────────────────────────────────────
+    // 액션 명령 처리 ────────────────────────────────────────────────
     const char* ap = strstr(d, "\"action\":\"");
     if (ap) {
       const char* s = ap + 10;
@@ -106,22 +131,22 @@ class RxCb : public NimBLECharacteristicCallbacks {
       return;
     }
 
-    // ── Config (ssid / password / serverUrl / uniqueId) ─────────────
+    // 설정(config) 파싱 ──────────────────────────────────────────────
     char ssid[64]  = {0};
     char pass[64]  = {0};
     char url[128]  = {0};
     char uid[32]   = {0};
 
-    #define EXTRACT(tag, buf, off) do {                              \
-      const char* _f = strstr(d, "\"" tag "\":\"");                 \
-      if (_f) {                                                      \
-        const char* _s = _f + off;                                   \
-        const char* _e = strchr(_s, '"');                            \
-        if (_e && (size_t)(_e - _s) < sizeof(buf)) {                 \
-          memcpy((void*)buf, _s, _e - _s);                           \
-          buf[_e - _s] = '\0';                                       \
-        }                                                             \
-      }                                                               \
+    #define EXTRACT(tag, buf, off) do {                \
+      const char* _f = strstr(d, "\"" tag "\":\"");    \
+      if (_f) {                                        \
+        const char* _s = _f + off;                     \
+        const char* _e = strchr(_s, '"');              \
+        if (_e && (size_t)(_e - _s) < sizeof(buf)) {   \
+          memcpy((void*)buf, _s, _e - _s);             \
+          buf[_e - _s] = '\0';                         \
+        }                                              \
+      }                                                \
     } while(0)
 
     EXTRACT("ssid",      ssid,  8);
@@ -132,7 +157,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
     #undef EXTRACT
 
     if (ssid[0] && pass[0] && url[0]) {
-      // ── Log received config ───────────────────────────────────────
+      // 수신 내용 로그 ──────────────────────────────────────────────
       Serial.println("===== CONFIG RECEIVED =====");
       Serial.printf("  ssid:      [%s]\n", ssid);
       Serial.printf("  password:  [%s]\n", pass);
@@ -148,7 +173,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
       if (uid[0])
         strncpy(gUniqueId, uid, sizeof(gUniqueId) - 1);
 
-      // ── Persist to NVS ────────────────────────────────────────────
+      // NVS에 저장 ──────────────────────────────────────────────────
       prefs.begin("nexio", false);
       prefs.putString("ssid", ssid);
       prefs.putString("pass", pass);
@@ -156,7 +181,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
       prefs.putString("uid",  gUniqueId);
       prefs.end();
 
-      // ── Parse server URL → host + port ────────────────────────────
+      // 서버 URL → host + port ──────────────────────────────────────
       int pp  = 0;
       int ps  = strstr(url, "://") ? (strstr(url, "://") - (char*)url + 3) : 0;
       char* lastColon = strrchr(url, ':');
@@ -165,12 +190,10 @@ class RxCb : public NimBLECharacteristicCallbacks {
       if (ps > 0 && pp > ps) {
         strncpy(gServerHost, url + ps, sizeof(gServerHost) - 1);
 
-        // Strip port from host
-        char* colon = strrchr(gServerHost, ':');
+        char* colon = strrchr(gServerHost, ':');  // 호스트에서 포트 제거
         if (colon) *colon = '\0';
 
-        // Strip trailing slash from host
-        char* slash = strchr(gServerHost, '/');
+        char* slash = strchr(gServerHost, '/');   // 호스트에서 후행 / 제거
         if (slash) *slash = '\0';
 
         gServerPort = atoi(url + pp);
@@ -179,7 +202,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
       gOnboarded = true;
       updateStatusFlags();
 
-      // Skip WiFi connect if already connected to the same SSID
+      // 이미 같은 SSID로 Wi-Fi 연결 중이면 생략
       if (WiFi.status() != WL_CONNECTED || strcmp(WiFi.SSID().c_str(), ssid) != 0)
         wifiConnect(ssid, pass);
     }
@@ -189,20 +212,21 @@ class RxCb : public NimBLECharacteristicCallbacks {
 static SvrCb _svrCb;
 static RxCb  _rxCb;
 
-// ══════════════════════════════════════════════════════════════════════
-//  BLE Helpers
-// ══════════════════════════════════════════════════════════════════════
-
+//-----------------------------------------------------------------------------
+// bleNotify: BLE 알림 전송
+// BLE 연결 상태면 notification으로 전송, USB CDC에는 항상 출력
+//-----------------------------------------------------------------------------
 static void bleNotify(const char* msg) {
-  // Send via BLE notification (when connected)
   if (gBleConnected && pTxChar) {
     pTxChar->setValue(msg);
     pTxChar->notify();
   }
-  // Always print to USB-CDC serial
   Serial.println(msg);
 }
 
+//-----------------------------------------------------------------------------
+// startBLEAdvertising: BLE 광고 시작
+//-----------------------------------------------------------------------------
 static void startBLEAdvertising() {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   adv->stop();
@@ -214,7 +238,7 @@ static void startBLEAdvertising() {
     strncpy(name, "Nexio", sizeof(name) - 1);
   NimBLEDevice::setDeviceName(name);
 
-  // Manufacturer data: company ID (0x02D5) + status flags
+  // Manufacturer data: 회사 ID(0x02D5) + 상태 플래그
   uint8_t mfg[5] = {
     (uint8_t)(0x02D5 & 0xFF),
     (uint8_t)(0x02D5 >> 8),
@@ -226,10 +250,13 @@ static void startBLEAdvertising() {
   bleNotify("[BLE] Advertising started");
 }
 
-// ── Status flag bits (exposed in BLE manufacturer data) ────────────
-//   Bit 1 (0x02) = SVR  — registered with server
-//   Bit 2 (0x04) = WIFI — Wi-Fi connected
-//   Bit 3 (0x08) = CFG  — onboarded (has config)
+//-----------------------------------------------------------------------------
+// updateStatusFlags: 상태 플래그 갱신
+//   Bit 1 (0x02) = SVR  — 서버 등록 완료
+//   Bit 2 (0x04) = WIFI — Wi-Fi 연결됨
+//   Bit 3 (0x08) = CFG  — 설정 보유
+// 플래그가 바뀌면 BLE 광고 데이터를 다시 내보내 스캐너가 새 상태를 감지
+//-----------------------------------------------------------------------------
 static void updateStatusFlags() {
   uint8_t f = 0;
   if (gRegistered)     f |= 0x02;
@@ -237,15 +264,23 @@ static void updateStatusFlags() {
   if (gOnboarded)      f |= 0x08;
   if (f != gStatusFlags) {
     gStatusFlags = f;
-    // Refresh BLE advertisement data so scanners see the new state
     if (gBleAdvertising) startBLEAdvertising();
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  Wi-Fi
-// ══════════════════════════════════════════════════════════════════════
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [3] Wi-Fi — 연결/재연결  
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+// wifiConnect: Wi-Fi 연결 시작
+//-----------------------------------------------------------------------------
 static void wifiConnect(const char* ssid, const char* pass) {
   char buf[128];
   snprintf(buf, sizeof(buf), "[WIFI] Connecting to %s...", ssid);
@@ -254,14 +289,23 @@ static void wifiConnect(const char* ssid, const char* pass) {
   delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
-  gWifiAttempted  = true;
-  gWifiAttemptTime = millis();
+  gWifiAttempted   = true;
+  gWifiAttemptTime  = millis();
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  WebSocket
-// ══════════════════════════════════════════════════════════════════════
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [4] WS    — WebSocket 송수신 (REGISTER, HEARTBEAT, 이벤트 처리)   
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+// sendRegister: REGISTER 전송
+//-----------------------------------------------------------------------------
 static void sendRegister() {
   char out[384];
   char bid[18];
@@ -280,6 +324,9 @@ static void sendRegister() {
   gWs.sendTXT(out);
 }
 
+//-----------------------------------------------------------------------------
+// sendHeartbeat: HEARTBEAT 전송
+//-----------------------------------------------------------------------------
 static void sendHeartbeat() {
   char out[256];
   int len = snprintf(out, sizeof(out),
@@ -290,6 +337,10 @@ static void sendHeartbeat() {
   gWs.sendTXT(out);
 }
 
+//-----------------------------------------------------------------------------
+// wsEvent: WS 이벤트 핸들러
+// 수신 메시지 종류: ASSIGN_ID, HEARTBEAT, CONTROL, DATA_RELAY
+//-----------------------------------------------------------------------------
 static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
@@ -314,7 +365,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
       const char* type = doc["type"];
       if (!type) return;
 
-      // ── ASSIGN_ID: server confirms registration ──────────────────
+      // ASSIGN_ID: 서버가 등록 확인 ──────────────────────────────────
       if (strcmp(type, "ASSIGN_ID") == 0) {
         const char* nid = doc["uniqueId"];
         if (nid && strlen(nid) > 0) {
@@ -331,18 +382,17 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
         }
         updateStatusFlags();
 
-      // ── HEARTBEAT: server alive signal ───────────────────────────
+      // HEARTBEAT: 서버 생존 신호 ───────────────────────────────────
       } else if (strcmp(type, "HEARTBEAT") == 0) {
         gLastServerMsg = millis();
 
-      // ── CONTROL: action from server ──────────────────────────────
+      // CONTROL: 서버가 보낸 액션 ────────────────────────────────────
       } else if (strcmp(type, "CONTROL") == 0) {
         const char* action = doc["action"];
         if (!action) return;
         if (strcmp(action, "RESET") == 0) {
           gPendingRestart = true;
         } else if (strcmp(action, "DISCARD") == 0) {
-          // Ack before restart so server knows we received it
           char out[256];
           int p = snprintf(out, sizeof(out),
             "{\"type\":\"DISCARD_ACK\",\"timestamp\":%lu", millis());
@@ -357,7 +407,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
           gPendingRestart = true;
         }
 
-      // ── DATA_RELAY: forward to product via UART ──────────────────
+      // DATA_RELAY: 서버 → 제품 UART 전달 ──────────────────────────
       } else if (strcmp(type, "DATA_RELAY") == 0) {
         const char* payload = doc["payload"];
         if (payload) wsToUart(payload, strlen(payload));
@@ -372,12 +422,20 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  UART ↔ WebSocket Relay
-// ══════════════════════════════════════════════════════════════════════
 
-// Read product UART bytes into a ring buffer, then flush them to the
-// server as DATA_RELAY messages (hex-encoded) when WS is connected.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [5] UART  — UART ↔ WS 중계 (링 버퍼, HEX 인코딩/디코딩)    
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+// uartToWs: 제품 UART → 서버
+// Serial1 바이트를 링 버퍼에 읽어들인 후 WS 연결 시 DATA_RELAY(HEX) 전송
+//-----------------------------------------------------------------------------
 static void uartToWs() {
   while (Serial1.available()) {
     uint8_t b      = Serial1.read();
@@ -391,13 +449,12 @@ static void uartToWs() {
   if (uartHead == uartTail || !gWsConnected || !gRegistered)
     return;
 
-  // Number of bytes available (cap at 240 to keep WS frames small)
   size_t avail = (uartHead >= uartTail)
                    ? (uartHead - uartTail)
                    : (UART_BUF_SIZE - uartTail);
-  if (avail > 240) avail = 240;
+  if (avail > 240) avail = 240;  // WS 프레임 크기 제한
 
-  // Hex-encode
+  // HEX 인코딩
   char hex[512];
   int pos = 0;
   for (size_t i = 0; i < avail && pos < (int)sizeof(hex) - 12; i++)
@@ -413,7 +470,10 @@ static void uartToWs() {
   gWs.sendTXT(out);
 }
 
-// Decode a hex-encoded DATA_RELAY payload and write to product UART.
+//-----------------------------------------------------------------------------
+// wsToUart: 서버 → 제품 UART
+// DATA_RELAY HEX payload를 디코딩하여 Serial1로 출력
+//-----------------------------------------------------------------------------
 static void wsToUart(const char* payload, size_t len) {
   for (size_t i = 0; i + 1 < len; i += 2) {
     char h[3] = { payload[i], payload[i + 1], '\0' };
@@ -424,16 +484,22 @@ static void wsToUart(const char* payload, size_t len) {
   Serial1.flush();
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  Setup
-// ══════════════════════════════════════════════════════════════════════
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [6] 초기화 — setup()     
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 void setup() {
   Serial.begin(115200);
   Serial1.begin(PRODUCT_UART_BAUD, SERIAL_8N1, PRODUCT_UART_RX, PRODUCT_UART_TX);
   pinMode(LED_PIN, OUTPUT);
 
-  // ── Restore persisted config ──────────────────────────────────────
+  // 저장된 설정 복원 ──────────────────────────────────────────────────
   prefs.begin("nexio", true);
   String ssid = prefs.getString("ssid", "");
   String pass = prefs.getString("pass", "");
@@ -456,7 +522,7 @@ void setup() {
     wifiConnect(ssid.c_str(), pass.c_str());
   }
 
-  // ── Initialise BLE ────────────────────────────────────────────────
+  // BLE 초기화 ────────────────────────────────────────────────────────
   NimBLEDevice::init("Nexio");
 
   NimBLEServer* pServer = NimBLEDevice::createServer();
@@ -473,27 +539,28 @@ void setup() {
   startBLEAdvertising();
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  Main Loop
-// ══════════════════════════════════════════════════════════════════════
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [7] 루프   — loop()  
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 void loop() {
-  // ── Pending restart (from RESET / DISCARD) ────────────────────────
+  // RESET / DISCARD 처리 ──────────────────────────────────────────────
   if (gPendingRestart) {
     gPendingRestart = false;
     delay(100);
     ESP.restart();
   }
 
-  // ── WebSocket housekeeping ────────────────────────────────────────
-  gWs.loop();
+  gWs.loop();                           // WS 송수신 처리
+  uartToWs();                           // UART → WS 전달
 
-  // ── UART → WS relay ───────────────────────────────────────────────
-  uartToWs();
-
-  // ── Wi-Fi state transitions ───────────────────────────────────────
-
-  // Connected (edge trigger)
+  // Wi-Fi: 연결 감지 ─────────────────────────────────────────────────
   if (WiFi.status() == WL_CONNECTED && !gWifiConnected) {
     gWifiConnected   = true;
     gWifiAttempted   = false;
@@ -513,7 +580,7 @@ void loop() {
     }
   }
 
-  // Disconnected (edge trigger)
+  // Wi-Fi: 끊김 감지 ─────────────────────────────────────────────────
   if (WiFi.status() != WL_CONNECTED && gWifiConnected) {
     gWifiConnected   = false;
     gRegistered      = false;
@@ -525,7 +592,7 @@ void loop() {
     gWsConnectStart = 0;
   }
 
-  // ── Wi-Fi timeout / retry ─────────────────────────────────────────
+  // Wi-Fi: 타임아웃 / 재시도 ─────────────────────────────────────────
   if (!gWifiConnected && gWifiAttempted &&
       millis() - gWifiAttemptTime > WIFI_TIMEOUT_MS) {
     gWifiAttempted = false;
@@ -539,8 +606,8 @@ void loop() {
     if (ssid.length() > 0) wifiConnect(ssid.c_str(), pass.c_str());
   }
 
-  // ── WebSocket reconnect watchdog ──────────────────────────────────
-  // Triggers only when Wi-Fi is up but WS has stayed disconnected > 5 s
+  // WS: 재연결 감시 ───────────────────────────────────────────────────
+  // Wi-Fi는 연결됐는데 WS가 5초 이상 안 잡히면 gWs.begin() 재호출
   if (gWifiConnected && gServerHost[0] && !gWsConnected &&
       gWsConnectStart > 0 &&
       millis() - gWsConnectStart > 5000) {
@@ -552,22 +619,23 @@ void loop() {
     gWsConnectStart = millis();
   }
 
-  // ── Send REGISTER (retry every 3 s until acknowledged) ────────────
+  // REGISTER: ack 받을 때까지 3초 간격 재시도 ──────────────────────
   if (gWifiConnected && gWsConnected && !gRegistered && gServerHost[0] &&
       millis() - gLastRegister > 3000) {
     gLastRegister = millis();
     sendRegister();
   }
 
-  // ── Send HEARTBEAT (every 5 s; server timeout is 9 s) ─────────────
+  // HEARTBEAT: 5초 간격; 서버 타임아웃 9초 ──────────────────────────
   if (gWifiConnected && gRegistered &&
       millis() - gLastServerMsg > 5000) {
     gLastServerMsg = millis();
     sendHeartbeat();
   }
 
-  // ── LED indicator ─────────────────────────────────────────────────
+  // LED 표시 ───────────────────────────────────────────────────────────
   digitalWrite(LED_PIN, WiFi.status() == WL_CONNECTED ? HIGH : LOW);
 
   delay(100);
 }
+
