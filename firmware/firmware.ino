@@ -7,9 +7,9 @@
 
 #define LED_PIN 8
 
-// Product UART — change pins to match your hardware
-#define PRODUCT_UART_TX 4
-#define PRODUCT_UART_RX 5
+// Product UART: GPIO 20(RX), GPIO 21(TX)
+#define PRODUCT_UART_TX 21
+#define PRODUCT_UART_RX 20
 #define PRODUCT_UART_BAUD 115200
 
 // UART RX ring buffer
