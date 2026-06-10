@@ -182,7 +182,8 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 | `gWifiConnected` | `bool` | `false` | Wi-Fi 연결 상태 |
 | `gWifiAttempted` | `bool` | `false` | `WiFi.begin()` 호출 여부 |
 | `gWifiAttemptTime` | `unsigned long` | `0` | 마지막 Wi-Fi 연결 시도 시각 (ms) |
-| `gWifiRetryCooldown` | `unsigned long` | `0` | 타임아웃 후 재시도 금지 시각. 30초 쿨다운 |
+| `gWifiRetryCount` | `int` | `0` | 연결 실패 누적 횟수 (3회 초과 시 중단) |
+| `gWifiRetryDone` | `bool` | `false` | 3회 재시도 후 더 이상 시도하지 않음 |
 | `gRegistered` | `bool` | `false` | 서버 ASSIGN_ID 수신 완료 |
 | `gBleConnected` | `bool` | `false` | BLE 링크 연결 상태 |
 | `gBleAdvertising` | `bool` | `false` | BLE 광고 중 |
@@ -709,8 +710,8 @@ Namespace: `"nexio"`
 
 | 장애 | 감지 조건 | 복구 동작 |
 |------|----------|-----------|
-| Wi-Fi 연결 실패 | `millis() - gWifiAttemptTime > 15000` | 타임아웃 후 30초 쿨다운, 이후 NVS에서 재시도 |
-| Wi-Fi 연결 끊김 | `WiFi.status() != WL_CONNECTED` | 자동 재연결 시도 |
+| Wi-Fi 연결 실패 | `millis() - gWifiAttemptTime > 15000` | 3회까지 재시도. 모두 실패 시 BLE 광고 모드로 대기 |
+| Wi-Fi 연결 끊김 | `WiFi.status() != WL_CONNECTED` | 연결 시도 재개 (retry count 초기화) |
 | WS 연결 실패 | `gWsConnectStart > 0 && 경과 > 5000` | `gWs.begin()` 재호출 |
 | WS 연결 끊김 | `WStype_DISCONNECTED` | 다음 루프에서 재연결 |
 | REGISTER 미승인 | 3초 경과 시 미등록 상태 | `sendRegister()` 재전송 |
@@ -731,12 +732,12 @@ Namespace: `"nexio"`
 
 | 상수 | 값 | 용도 |
 |------|----|------|
-| `WIFI_TIMEOUT_MS` | 15000 ms | Wi-Fi 연결 시도 타임아웃 |
+| `WIFI_TIMEOUT_MS` | 15000 ms | Wi-Fi 연결 시도 타임아웃 (3회 재시도, 총 45초) |
 | WS 재연결 대기 | 5000 ms | WS handshake 타임아웃 |
 | REGISTER 재시도 간격 | 3000 ms | 등록 ack 재시도 |
 | HEARTBEAT 전송 간격 | 5000 ms | 서버 생존 신호 |
 | 서버 HEARTBEAT 타임아웃 | 9000 ms (서버 측) | 서버가 연결을 끊는 기준 |
- | `loop()` 지연 | 100 ms | 메인 루프 주기 |
+| `loop()` 지연 | 100 ms | 메인 루프 주기 |
 
 ---
 

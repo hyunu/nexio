@@ -44,7 +44,8 @@ static uint8_t        gStatusFlags        = 0;             // BLE mfg data 비�
 static bool           gWifiConnected      = false;         // Wi-Fi 링크 연결됨
 static bool           gWifiAttempted      = false;         // Wi-Fi.begin() 호출됨
 static unsigned long  gWifiAttemptTime    = 0;             // 마지막 Wi-Fi 연결 시도 시각
-static unsigned long  gWifiRetryCooldown  = 0;             // 재시도 금지 시각 (타임아웃 후 30초)
+static int            gWifiRetryCount     = 0;             // 연결 실패 누적 횟수 (3회 초과 시 중단)
+static bool           gWifiRetryDone      = false;         // 재시도 한계 도달
 static bool           gRegistered         = false;         // 서버가 ASSIGN_ID 전송 완료
 static bool           gBleConnected       = false;         // BLE 링크 연결됨
 static bool           gBleAdvertising     = false;         // BLE 광고 중
@@ -200,7 +201,9 @@ class RxCb : public NimBLECharacteristicCallbacks {
         gServerPort = atoi(url + pp);
       }
 
-      gOnboarded = true;
+      gOnboarded      = true;
+      gWifiRetryCount = 0;
+      gWifiRetryDone  = false;
       updateStatusFlags();
 
       // 이미 같은 SSID로 Wi-Fi 연결 중이면 생략
@@ -283,15 +286,18 @@ static void updateStatusFlags() {
 // wifiConnect: Wi-Fi 연결 시작
 //-----------------------------------------------------------------------------
 static void wifiConnect(const char* ssid, const char* pass) {
-  char buf[128];
-  snprintf(buf, sizeof(buf), "[WIFI] Connecting to %s...", ssid);
-  bleNotify(buf);
   WiFi.disconnect(true);
-  delay(100);
+  delay(300);                            // 이전 연결 완전 정리 대기
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
   gWifiAttempted   = true;
   gWifiAttemptTime  = millis();
+  ++gWifiRetryCount;
+
+  char buf[128];
+  snprintf(buf, sizeof(buf), "[WIFI] Connecting to %s... (attempt %d/3)",
+           ssid, gWifiRetryCount);
+  bleNotify(buf);
 }
 
 
@@ -565,6 +571,8 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED && !gWifiConnected) {
     gWifiConnected   = true;
     gWifiAttempted   = false;
+    gWifiRetryCount  = 0;
+    gWifiRetryDone   = false;
     updateStatusFlags();
 
     char buf[128];
@@ -596,17 +604,22 @@ void loop() {
   // Wi-Fi: 타임아웃 / 재시도 ─────────────────────────────────────────
   if (!gWifiConnected && gWifiAttempted &&
       millis() - gWifiAttemptTime > WIFI_TIMEOUT_MS) {
-    gWifiAttempted     = false;
-    gWifiRetryCooldown = millis() + 30000;
-    bleNotify("[WIFI] Connection failed (timeout) — retry in 30s");
+    gWifiAttempted = false;
+    bleNotify("[WIFI] Connection failed (timeout)");
   }
   if (!gWifiConnected && !gWifiAttempted && gOnboarded &&
-      millis() > gWifiRetryCooldown) {
+      !gWifiRetryDone && gWifiRetryCount < 3) {
     prefs.begin("nexio", true);
     String ssid = prefs.getString("ssid", "");
     String pass = prefs.getString("pass", "");
     prefs.end();
     if (ssid.length() > 0) wifiConnect(ssid.c_str(), pass.c_str());
+  }
+  if (!gWifiConnected && !gWifiAttempted && !gWifiRetryDone &&
+      gWifiRetryCount >= 3) {
+    gWifiRetryDone = true;
+    bleNotify("[WIFI] 3 attempts failed. Send new config via BLE.");
+    if (!gBleAdvertising) startBLEAdvertising();
   }
 
   // WS: 재연결 감시 ───────────────────────────────────────────────────
