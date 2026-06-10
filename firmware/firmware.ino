@@ -13,43 +13,43 @@
 #define PRODUCT_UART_RX      20
 #define PRODUCT_UART_BAUD 115200
 
-// UART RX ring buffer
-static const size_t UART_BUF_SIZE = 1024;
-static       uint8_t  uartRing[UART_BUF_SIZE];
-static       size_t   uartHead = 0;
-static       size_t   uartTail = 0;
+// ── UART RX ring buffer ───────────────────────────────────────────
+static const size_t UART_BUF_SIZE    = 1024;          // ring buffer capacity (bytes)
+static       uint8_t  uartRing[UART_BUF_SIZE];        // ring buffer storage
+static       size_t   uartHead       = 0;              // next write index (producer)
+static       size_t   uartTail       = 0;              // next read  index (consumer)
 
-// ── BLE UUIDs ───────────────────────────────────────────────────────
-static const char* SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-static const char*   CHAR_TX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-static const char*   CHAR_RX_UUID = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+// ── BLE GATT UUIDs ────────────────────────────────────────────────
+static const char* SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+static const char* CHAR_TX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // ← board → phone (notify)
+static const char* CHAR_RX_UUID  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // ← phone → board  (write)
 
-// ── State ───────────────────────────────────────────────────────────
-static char    gUniqueId[32]      = {0};
-static char    gServerHost[64]    = {0};
-static uint16_t gServerPort        = 0;
-static bool    gWifiConnected     = false;
-static bool    gRegistered        = false;
-static bool    gOnboarded         = false;
-static uint8_t gStatusFlags       = 0;
-static bool    gBleConnected      = false;
-static bool    gBleAdvertising    = false;
-static bool    gWifiAttempted     = false;
-static unsigned long gWifiAttemptTime = 0;
-static volatile bool  gPendingRestart  = false;
+// ── Onboarding / connection state ─────────────────────────────────
+static char    gUniqueId[32]       = {0};              // assigned by server (e.g. "0042")
+static char    gServerHost[64]     = {0};              // parsed WS host (no port)
+static uint16_t gServerPort         = 0;                // parsed WS port
+static bool    gOnboarded          = false;             // has Wi-Fi config stored in NVS
+static uint8_t gStatusFlags        = 0;                 // bitmask for BLE mfg data
+static bool    gWifiConnected      = false;             // Wi-Fi link up
+static bool    gWifiAttempted      = false;             // Wi-Fi.begin() called
+static unsigned long gWifiAttemptTime = 0;               // timestamp of last Wi-Fi attempt
+static bool    gRegistered         = false;             // server has sent ASSIGN_ID
+static bool    gBleConnected       = false;             // BLE link up
+static bool    gBleAdvertising     = false;             // BLE advertisement active
+static volatile bool  gPendingRestart = false;           // set by RESET/DISCARD, consumed in loop()
 
-// WebSocket
-static bool    gWsConnected      = false;
-static unsigned long gWsConnectStart  = 0;
+// ── WebSocket state ───────────────────────────────────────────────
+static bool    gWsConnected       = false;              // WS link up
+static unsigned long gWsConnectStart = 0;                // millis() when gWs.begin() was called
 
-// BLE characteristic / WS client / NVS
-static NimBLECharacteristic* pTxChar = nullptr;
-static WebSocketsClient      gWs;
-static Preferences            prefs;
+// ── Handles ───────────────────────────────────────────────────────
+static NimBLECharacteristic* pTxChar  = nullptr;        // BLE notify characteristic
+static WebSocketsClient      gWs;                        // WS client instance
+static Preferences            prefs;                      // NVS (preferences) handle
 
-// Heartbeat / register throttle
-static unsigned long gLastServerMsg  = 0;
-static unsigned long gLastRegister   = 0;
+// ── Throttle timestamps ───────────────────────────────────────────
+static unsigned long gLastServerMsg  = 0;                // last HEARTBEAT from server
+static unsigned long gLastRegister   = 0;                // last REGISTER sent
 
 // ── Forward declarations ────────────────────────────────────────────
 static void startBLEAdvertising();
