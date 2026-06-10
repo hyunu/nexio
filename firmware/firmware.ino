@@ -7,6 +7,16 @@
 
 #define LED_PIN 8
 
+// Product UART — change pins to match your hardware
+#define PRODUCT_UART_TX 4
+#define PRODUCT_UART_RX 5
+#define PRODUCT_UART_BAUD 115200
+
+// UART RX ring buffer
+static const size_t UART_BUF_SIZE = 1024;
+static uint8_t uartRing[UART_BUF_SIZE];
+static size_t uartHead = 0, uartTail = 0;
+
 // BLE UUIDs
 static const char* SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 static const char* CHAR_TX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
@@ -262,7 +272,8 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
           gPendingRestart = true;
         }
       } else if (strcmp(type, "DATA_RELAY") == 0) {
-        // Forward to UART if needed
+        const char* payload = doc["payload"];
+        if (payload) wsToUart(payload, strlen(payload));
       }
       break;
     }
@@ -293,6 +304,49 @@ static void sendRegister() {
   gWs.sendTXT(out);
 }
 
+// ========== UART ↔ WebSocket relay ==========
+
+static void uartToWs() {
+  while (Serial1.available()) {
+    uint8_t b = Serial1.read();
+    size_t next = (uartHead + 1) % UART_BUF_SIZE;
+    if (next != uartTail) {
+      uartRing[uartHead] = b;
+      uartHead = next;
+    }
+  }
+
+  if (uartHead != uartTail && gWsConnected && gRegistered) {
+    // Send accumulated UART data as DATA_RELAY
+    size_t avail = (uartHead >= uartTail) ? (uartHead - uartTail) : (UART_BUF_SIZE - uartTail);
+    // Cap at ~240 bytes to keep WS frame small
+    if (avail > 240) avail = 240;
+
+    char hex[512];
+    int pos = 0;
+    for (size_t i = 0; i < avail && pos < (int)sizeof(hex) - 12; i++) {
+      pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X", uartRing[(uartTail + i) % UART_BUF_SIZE]);
+    }
+    uartTail = (uartTail + avail) % UART_BUF_SIZE;
+
+    char out[640];
+    snprintf(out, sizeof(out),
+      "{\"type\":\"DATA_RELAY\",\"payload\":\"%s\",\"direction\":\"uart_to_server\"}", hex);
+    gWs.sendTXT(out);
+  }
+}
+
+static void wsToUart(const char* payload, size_t len) {
+  // Decode hex payload
+  for (size_t i = 0; i + 1 < len; i += 2) {
+    char h[3] = { payload[i], payload[i + 1], '\0' };
+    char* end = nullptr;
+    uint8_t b = strtoul(h, &end, 16);
+    if (*end == '\0') Serial1.write(b);
+  }
+  Serial1.flush();
+}
+
 static void sendHeartbeat() {
   char out[256];
   int len = snprintf(out, sizeof(out), "{\"type\":\"HEARTBEAT\",\"version\":\"1.0\",\"timestamp\":%lu", millis());
@@ -305,6 +359,7 @@ static void sendHeartbeat() {
 
 void setup() {
   Serial.begin(115200);
+  Serial1.begin(PRODUCT_UART_BAUD, SERIAL_8N1, PRODUCT_UART_RX, PRODUCT_UART_TX);
   pinMode(LED_PIN, OUTPUT);
 
   // Load stored config
@@ -354,6 +409,9 @@ void loop() {
   }
 
   gWs.loop();
+
+  // UART → WS relay
+  uartToWs();
 
   // WiFi connected
   if (WiFi.status() == WL_CONNECTED && !gWifiConnected) {
