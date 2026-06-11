@@ -8,6 +8,7 @@
 //
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#define USE_OLED
 
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -15,14 +16,18 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
-#include <U8g2lib.h>
-#include <Wire.h>
+#ifdef USE_OLED
+  #include <U8g2lib.h>
+  #include <Wire.h>
+#endif
 
 #define LED_PIN              8
-#define OLED_SDA             5
-#define OLED_SCL             6
-#define OLED_WIDTH           72
-#define OLED_HEIGHT          40
+#ifdef  USE_OLED
+  #define OLED_SDA           5
+  #define OLED_SCL           6
+  #define OLED_WIDTH         72
+  #define OLED_HEIGHT        40
+#endif
 #define WIFI_TIMEOUT_MS      15000
 
 // ── 제품 UART (Serial1) ──────────────────────────────────────────────
@@ -66,9 +71,11 @@ static unsigned long  gWsConnectStart    = 0;              // gWs.begin() 호출
 static NimBLECharacteristic*  pTxChar  = nullptr;          // BLE notify 특성
 static WebSocketsClient       gWs;                          // WS 클라이언트 인스턴스
 static Preferences            prefs;                        // NVS 핸들
+#ifdef USE_OLED
 static U8G2_SSD1306_128X64_NONAME_F_HW_I2C  u8g2(U8G2_R0, U8X8_PIN_NONE, OLED_SCL, OLED_SDA);
 static const int                              OLED_X_OFFSET = 30;
 static const int                              OLED_Y_OFFSET = 12;
+#endif
 
 // ── 주기 타이머 ─────────────────────────────────────────────────────
 static unsigned long  gLastServerMsg  = 0;                 // 마지막 서버 HEARTBEAT 수신 시각
@@ -80,7 +87,9 @@ static void bleNotify(const char* msg);
 static void updateStatusFlags();
 static void wifiConnect(const char* ssid, const char* pass);
 static void wsToUart(const char* payload, size_t len);
+#ifdef USE_OLED
 static void updateDisplay();
+#endif
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -464,7 +473,12 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
 static void uartToWs() {
   while (Serial1.available()) {
     uint8_t b      = Serial1.read();
-    if (!gProductConnected) { gProductConnected = true; updateDisplay(); }
+    if (!gProductConnected) {
+      gProductConnected = true;
+#ifdef USE_OLED
+      updateDisplay();
+#endif
+    }
     size_t  next   = (uartHead + 1) % UART_BUF_SIZE;
     if (next != uartTail) {
       uartRing[uartHead] = b;
@@ -514,11 +528,12 @@ static void wsToUart(const char* payload, size_t len) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //
-//          [6] OLED   — OLED 초기화 및 표시 갱신
+//          [6] OLED   — OLED 초기화 및 표시 갱신 (USE_OLED)
 //
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+#ifdef USE_OLED
 
 //-----------------------------------------------------------------------------
 // oledInit: SSD1306 72x40 OLED 초기화 (I2C: SDA=GPIO5, SCL=GPIO6)
@@ -565,6 +580,8 @@ static void updateDisplay() {
 
   u8g2.sendBuffer();
 }
+
+#endif // USE_OLED
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -624,7 +641,9 @@ void setup() {
 
   startBLEAdvertising();
 
+#ifdef USE_OLED
   oledInit();
+#endif
 }
 
 
@@ -733,7 +752,9 @@ void loop() {
   // LED 표시 ───────────────────────────────────────────────────────────
   digitalWrite(LED_PIN, WiFi.status() == WL_CONNECTED ? HIGH : LOW);
 
+#ifdef USE_OLED
   updateDisplay();
+#endif
 
   delay(100);
 }
