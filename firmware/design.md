@@ -1,8 +1,8 @@
 # ESP32-C3 펌웨어 설계 명세서
 
-> **대상 보드**: QSZNTEC 1.28" 원형 디스플레이 보드 (ESP32-C3)
-> **역할**: BLE 온보딩 → Wi-Fi 연결 → WebSocket 통신 → UART 데이터 중계
-> **언어**: Arduino(C++) — PlatformIO
+> **대상 보드**: 0.42인치 SSD1306 OLED (72×40) 탑재 ESP32-C3 보드
+> **역할**: BLE 온보딩 → Wi-Fi 연결 → WebSocket 통신 → UART 데이터 중계 → OLED 상태 표시
+> **언어**: Arduino(C++)
 
 ---
 
@@ -15,6 +15,7 @@ graph TB
         WIFI["Wi-Fi Station<br/>연결/재연결 관리"]
         WS["WebSocket Client<br/>서버 메시지 송수신"]
         UART["UART Relay<br/>링 버퍼 + HEX 인코딩"]
+        OLED["SSD1306 OLED 72×40<br/>상태 + ID 표시"]
         NVS["Preferences(NVS)<br/>설정 영구 저장"]
     end
 
@@ -32,28 +33,47 @@ graph TB
 
 | 단계 | 설명 |
 |------|------|
-| 1 | 보드 부팅 — NVS에 저장된 Wi-Fi 설정이 있으면 자동 연결 |
-| 2 | 설정이 없으면 BLE 광고 시작 (이름: `Nexio`) |
-| 3 | 모바일 앱이 BLE로 SSID/Password/ServerURL 전송 |
-| 4 | 보드가 NVS에 저장 후 Wi-Fi 연결 시도 |
-| 5 | Wi-Fi 연결 성공 → WebSocket 서버에 접속 |
-| 6 | `REGISTER` 전송 → 서버가 `ASSIGN_ID`로 응답 |
-| 7 | 등록 완료 후 UART ↔ WS 데이터 중계 시작 |
-| 8 | 주기적 `HEARTBEAT`로 연결 유지 |
-| 9 | Wi-Fi/WS 끊김 시 자동 재연결 |
+| 1 | 보드 부팅 — OLED에 "Booting..." 표시 |
+| 2 | NVS에 저장된 Wi-Fi 설정이 있으면 자동 연결 |
+| 3 | 설정이 없으면 BLE 광고 시작 (이름: `Nexio`) |
+| 4 | 모바일 앱이 BLE로 SSID/Password/ServerURL 전송 |
+| 5 | 보드가 NVS에 저장 후 Wi-Fi 연결 시도 |
+| 6 | Wi-Fi 연결 성공 → WebSocket 서버에 접속 |
+| 7 | `REGISTER` 전송 → 서버가 `ASSIGN_ID`로 응답 |
+| 8 | 등록 완료 후 UART ↔ WS 데이터 중계 시작 |
+| 9 | 주기적 `HEARTBEAT`로 연결 유지 |
+| 10 | Wi-Fi/WS 끊김 시 자동 재연결 |
+| 11 | OLED에 `[W][S][P]` 상태 + Unique ID 실시간 표시 |
 
 ---
 
 ## 2. 하드웨어 구성
 
-### 배정 목록
+### 핀 배정
 
 | ESP32-C3 핀 | 연결 대상 | 용도 | 비고 |
 |-------------|----------|------|------|
-| GPIO 8      | 온보드 LED | Wi-Fi 연결 표시 | HIGH=연결, LOW=미연결 |
-| GPIO 21     | Serial1 TX | 제품 UART 송신 | `Serial1.write()` |
-| GPIO 20     | Serial1 RX | 제품 UART 수신 | `Serial1.read()` |
-| —           | USB CDC    | 디버그 콘솔 | `Serial.begin(115200)` |
+| GPIO 8 | 온보드 LED | Wi-Fi 연결 표시 | HIGH=연결, LOW=미연결 |
+| GPIO 5 | OLED SDA | I2C 데이터 | `Wire.begin(5, 6)` |
+| GPIO 6 | OLED SCL | I2C 클록 | 400kHz |
+| GPIO 21 | Serial1 TX | 제품 UART 송신 | `Serial1.write()` |
+| GPIO 20 | Serial1 RX | 제품 UART 수신 | `Serial1.read()` |
+| — | USB CDC | 디버그 콘솔 | `Serial.begin(115200)` |
+
+### OLED — SSD1306 72×40
+
+SSD1306 128×64 드라이버 IC에 72×40 픽셀 글래스가 (30,12) 오프셋으로 본딩되어 있다. U8g2 라이브러리는 128×64 모드로 구동하며 소프트웨어적으로 (30,12)를 보정한다.
+
+| 항목 | 값 |
+|------|-----|
+| 라이브러리 | `U8g2` (`U8G2_SSD1306_128X64_NONAME_F_HW_I2C`) |
+| 생성자 인자 | `U8G2_R0, U8X8_PIN_NONE, SCL=6, SDA=5` |
+| X 오프셋 | 30 (`OLED_X_OFFSET`) |
+| Y 오프셋 | 12 (`OLED_Y_OFFSET`) |
+| 가시 폭 | 72px (`OLED_WIDTH`) |
+| 가시 높이 | 40px (`OLED_HEIGHT`) |
+| I2C 속도 | 400kHz (`setBusClock`) |
+| 대비 | 255 (최대) |
 
 ### UART 규격
 
@@ -74,14 +94,15 @@ graph TB
 ### 모듈 구조
 
 ```
-firmware.ino (단일 파일 — 7개 모듈)
+firmware.ino (단일 파일 — 8개 모듈)
 ├── [1] 전방부 — Includes, Macros, 전역 변수, 전방 선언
 ├── [2] BLE    — NimBLE 서버/콜백, 알림, 광고, 상태 플래그
 ├── [3] Wi-Fi  — 연결/재연결
 ├── [4] WS     — WebSocket 송수신
 ├── [5] UART   — UART ↔ WS 중계
-├── [6] 초기화 — setup()
-└── [7] 루프   — loop()
+├── [6] OLED   — SSD1306 초기화 및 상태 표시
+├── [7] 초기화 — setup()
+└── [8] 루프   — loop()
 ```
 
 ### 라이브러리 의존성
@@ -93,6 +114,8 @@ firmware.ino (단일 파일 — 7개 모듈)
 | WebSockets | WebSocket 클라이언트 | `WebSocketsClient.h` |
 | ArduinoJson 6.x | JSON 파싱 | `ArduinoJson.h` |
 | Preferences | NVS 저장소 | `Preferences.h` |
+| U8g2 | SSD1306 OLED 구동 | `U8g2lib.h` |
+| Wire | I2C 통신 | `Wire.h` |
 
 ---
 
@@ -136,6 +159,19 @@ stateDiagram-v2
     IDLE --> RESTART : CONTROL RESET/DISCARD
     RESTART --> [*] : ESP.restart()
 ```
+
+### OLED 상태 표시
+
+OLED 상단에 Unique ID, 하단에 상태 표시줄을 그린다.
+
+| 상태 | `[W]` | `[S]` | `[P]` |
+|------|-------|-------|-------|
+| 미연결 | `[ ]` | `[ ]]` | `[ ]` |
+| 연결 | `[W]` | `[S]` | `[P]` |
+
+- `[W]` — `gWifiConnected` (Wi-Fi 링크 연결)
+- `[S]` — `gRegistered` (서버 ASSIGN_ID 수신)
+- `[P]` — `gProductConnected` (UART 첫 바이트 수신)
 
 ### 상태 플래그 요약
 
@@ -188,6 +224,7 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 | `gBleConnected` | `bool` | `false` | BLE 링크 연결 상태 |
 | `gBleAdvertising` | `bool` | `false` | BLE 광고 중 |
 | `gPendingRestart` | `volatile bool` | `false` | RESET/DISCARD 명령 수신 → loop에서 소비 |
+| `gProductConnected` | `bool` | `false` | 제품 UART 첫 바이트 수신 시 true |
 
 ### WebSocket 상태
 
@@ -195,6 +232,14 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 |------|------|--------|------|
 | `gWsConnected` | `bool` | `false` | WS 링크 연결 상태 |
 | `gWsConnectStart` | `unsigned long` | `0` | `gWs.begin()` 호출 시각 |
+
+### OLED 핸들
+
+| 변수 | 타입 | 설명 |
+|------|------|------|
+| `u8g2` | `U8G2_SSD1306_128X64_NONAME_F_HW_I2C` | OLED 제어 인스턴스 |
+| `OLED_X_OFFSET` | `const int` | 30 (128×64 버퍼 내 72×40 윈도우 X 시작) |
+| `OLED_Y_OFFSET` | `const int` | 12 (128×64 버퍼 내 72×40 윈도우 Y 시작) |
 
 ### 타이머
 
@@ -205,8 +250,8 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 
 ### 핸들
 
-| 변수 | 타입 | 초기값 | 설명 |
-|------|------|--------|------|
+| 변수 | 타입 | 설명 |
+|------|------|------|
 | `pTxChar` | `NimBLECharacteristic*` | `nullptr` | BLE TX 특성 (Notify 용) |
 | `gWs` | `WebSocketsClient` | 기본 생성 | WS 클라이언트 인스턴스 |
 | `prefs` | `Preferences` | 기본 생성 | NVS 읽기/쓰기 핸들 |
@@ -224,11 +269,15 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 
 ### [1] 전방부
 
-**Includes** — 6개의 표준/외부 라이브러리를 include 한다.
+**Includes** — 7개의 표준/외부 라이브러리를 include 한다.
 
 **Macros:**
 ```c
 #define LED_PIN              8   // GPIO 8 — Wi-Fi 연결 표시 LED
+#define OLED_SDA             5   // OLED I2C 데이터
+#define OLED_SCL             6   // OLED I2C 클록
+#define OLED_WIDTH           72  // OLED 가시 폭
+#define OLED_HEIGHT          40  // OLED 가시 높이
 #define WIFI_TIMEOUT_MS  15000   // Wi-Fi 연결 시도 타임아웃 (ms)
 #define PRODUCT_UART_TX      21  // Serial1 TX 핀
 #define PRODUCT_UART_RX      20  // Serial1 RX 핀
@@ -241,6 +290,7 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 - `updateStatusFlags()`
 - `wifiConnect(const char* ssid, const char* pass)`
 - `wsToUart(const char* payload, size_t len)`
+- `updateDisplay()`
 
 ---
 
@@ -328,11 +378,9 @@ if (gOnboarded)     f |= 0x08;   // Bit 3: CFG
 #### `wifiConnect(ssid, pass)`
 
 1. `bleNotify("[WIFI] Connecting to %s...", ssid)`
-2. `WiFi.disconnect(true)` — 기존 연결 해제
-3. `delay(100)` — 안정화 대기
-4. `WiFi.mode(WIFI_STA)` — Station 모드
-5. `WiFi.begin(ssid, pass)` — 연결 시작
-6. `gWifiAttempted = true`, `gWifiAttemptTime = millis()`
+2. `WiFi.mode(WIFI_STA)` — Station 모드
+3. `WiFi.begin(ssid, pass)` — 연결 시작
+4. `gWifiAttempted = true`, `gWifiAttemptTime = millis()`
 
 연결 결과는 loop()에서 비동기로 감지한다. 차단 대기하지 않는다.
 
@@ -351,13 +399,16 @@ if (gOnboarded)     f |= 0x08;   // Bit 3: CFG
   "timestamp": 1700000,
   "boardId": "AA:BB:CC:DD:EE:FF",
   "firmwareVersion": "1.0.0",
-  "displayAvailable": false,
+  "displayAvailable": true,
   "productConnected": false,
-  "uniqueId": "0042"          // 있을 때만 포함
+  "uniqueId": "0042"
 }
 ```
 
-`boardId`는 `WiFi.macAddress()`로 채운다.
+- `displayAvailable`: 항상 `true` (OLED 장착 보드)
+- `productConnected`: `gProductConnected` 값 동적 반영
+- `boardId`: `WiFi.macAddress()`로 채움
+- `uniqueId`: 있을 때만 포함
 
 #### `sendHeartbeat()`
 
@@ -368,7 +419,7 @@ if (gOnboarded)     f |= 0x08;   // Bit 3: CFG
   "type": "HEARTBEAT",
   "version": "1.0",
   "timestamp": 1700000,
-  "id": "0042"                // 있을 때만 포함
+  "id": "0042"
 }
 ```
 
@@ -418,10 +469,11 @@ graph LR
 상세:
 1. `Serial1.available()` 동안 읽어 링 버퍼에 저장 (overflow 시 버림)
 2. 버퍼가 비었거나 WS/등록 미완료면 return
-3. 읽을 수 있는 최대 크기 계산: `(head - tail) % UART_BUF_SIZE`, 최대 240바이트
-4. 각 바이트를 `%02X`로 HEX 인코딩하여 문자열 생성
-5. `DATA_RELAY` JSON으로 WS 전송
-6. 소비자 인덱스(tail) 전진
+3. 첫 바이트 수신 시 `gProductConnected = true` 설정, `updateDisplay()` 호출
+4. 읽을 수 있는 최대 크기 계산: `(head - tail) % UART_BUF_SIZE`, 최대 240바이트
+5. 각 바이트를 `%02X`로 HEX 인코딩하여 문자열 생성
+6. `DATA_RELAY` JSON으로 WS 전송
+7. 소비자 인덱스(tail) 전진
 
 전송 JSON:
 ```json
@@ -440,12 +492,47 @@ graph LR
 
 ---
 
-### [6] 초기화 — `setup()`
+### [6] OLED
+
+#### `oledInit()`
+
+setup()에서 BLE 초기화 직후 호출된다.
+
+1. `Wire.begin(OLED_SDA=5, OLED_SCL=6)` — I2C 시작
+2. `u8g2.begin()` — 디스플레이 초기화
+3. `u8g2.setContrast(255)` — 최대 밝기
+4. `u8g2.setBusClock(400000)` — I2C 400kHz
+5. `clearBuffer()` → `"Booting..."` 출력 → `sendBuffer()`
+
+#### `updateDisplay()`
+
+loop()에서 매 100ms마다 호출된다.
+
+**레이아웃 (128×64 버퍼 기준, (30,12) 오프셋 적용):**
+
+```
+┌──────────────────────┐
+│      Unique ID       │  ← logisoso24 (24px), baseline Y=48
+│       (0042)         │
+├──────────────────────┤
+│   [W][S][P]          │  ← 6x10 (10px), baseline Y=60
+└──────────────────────┘
+```
+
+- **상단**: `u8g2_font_logisoso24_tf` — Unique ID (없으면 `"----"`)
+- **하단**: `u8g2_font_6x10_tr` — `[W][S][P]` (연결 시에만 글자 표시)
+
+`gProductConnected`가 UART 첫 바이트 수신 시 `true`로 설정되며, `[P]`가 활성화된다.
+
+---
+
+### [7] 초기화 — `setup()`
 
 ```mermaid
 graph TD
     START["시작"]
     SERIAL["Serial(115200)<br/>Serial1(115200, 8N1, RX=20, TX=21)<br/>pinMode(LED, OUTPUT)"]
+    WIFI_INIT["WiFi.persistent(false)<br/>WiFi.mode(WIFI_STA)"]
     NVS_READ["prefs.begin('nexio', true)<br/>ssid / pass / url / uid 읽기"]
     HAS_CONFIG{"ssid.length() > 0?"}
     RESTORE["gUniqueId = uid<br/>gOnboarded = true<br/>URL 파싱 → host:port"]
@@ -458,10 +545,12 @@ graph TD
     BLE5["RX 특성 생성 (WRITE + WRITE_NR)<br/>setCallbacks(&_rxCb)"]
     BLE6["svc->start()"]
     ADV["startBLEAdvertising()"]
+    OLED_INIT["oledInit()"]
     DONE["종료"]
 
     START --> SERIAL
-    SERIAL --> NVS_READ
+    SERIAL --> WIFI_INIT
+    WIFI_INIT --> NVS_READ
     NVS_READ --> HAS_CONFIG
     HAS_CONFIG -->|예| RESTORE
     RESTORE --> WIFI_CALL
@@ -474,12 +563,13 @@ graph TD
     BLE4 --> BLE5
     BLE5 --> BLE6
     BLE6 --> ADV
-    ADV --> DONE
+    ADV --> OLED_INIT
+    OLED_INIT --> DONE
 ```
 
 ---
 
-### [7] 메인 루프 — `loop()`
+### [8] 메인 루프 — `loop()`
 
 매 반복(100ms delay)마다 아래 항목을 순차 처리:
 
@@ -505,6 +595,7 @@ graph TD
     HB{"HEARTBEAT 전송 필요?"}
     HB_ACT["sendHeartbeat()"]
     LED["digitalWrite(LED, WiFi 상태)"]
+    OLED_DISP["updateDisplay()"]
     DELAY["delay(100)"]
 
     START --> RESTART_CHECK
@@ -533,7 +624,8 @@ graph TD
     HB -->|5초 간격| HB_ACT
     HB_ACT --> LED
     HB --> LED
-    LED --> DELAY
+    LED --> OLED_DISP
+    OLED_DISP --> DELAY
     DELAY --> START
 ```
 
@@ -550,6 +642,7 @@ graph TD
 | REGISTER 전송 | `gWsConnected && !gRegistered && 경과 > 3000ms` | `sendRegister()` |
 | HEARTBEAT 전송 | `gRegistered && 경과 > 5000ms` | `sendHeartbeat()` |
 | LED 표시 | — | Wi-Fi 연결 시 HIGH |
+| OLED 갱신 | — | `updateDisplay()` 호출 |
 
 ---
 
@@ -615,7 +708,7 @@ Bytes 3-4: 예비 (0x00)
   "timestamp": 1700000,
   "boardId": "AA:BB:CC:DD:EE:FF",
   "firmwareVersion": "1.0.0",
-  "displayAvailable": false,
+  "displayAvailable": true,
   "productConnected": false,
   "uniqueId": "0042"
 }
@@ -728,7 +821,34 @@ Namespace: `"nexio"`
 
 ---
 
-## 11. 타이밍 상수
+## 11. OLED 표시
+
+### 레이아웃
+
+SSD1306 128×64 프레임버퍼에서 (30,12)~(101,51) 영역만 물리적으로 보인다.
+
+```
+Buffer Y  Physical Y
+  12          0     ┌──────────────────────┐
+                     │      0042            │  ← logisoso24
+  36         24     │                      │
+                     ├──────────────────────┤
+  48         36     │   [W][S][P]           │  ← 6x10
+  52         40     └──────────────────────┘
+```
+
+### 표시 항목
+
+| 위치 | 폰트 | 내용 | 조건 |
+|------|------|------|------|
+| 상단 | `logisoso24_tf` (24px) | Unique ID (예: `0042`) | 미할당 시 `----` |
+| 하단 | `6x10_tr` (10px) | `[W][S][P]` | 각 연결 시 해당 글자 표시 |
+
+`[W]`: `gWifiConnected`, `[S]`: `gRegistered`, `[P]`: `gProductConnected`
+
+---
+
+## 12. 타이밍 상수
 
 | 상수 | 값 | 용도 |
 |------|----|------|
@@ -741,7 +861,7 @@ Namespace: `"nexio"`
 
 ---
 
-## 12. 단어장
+## 13. 단어장
 
 | 용어 | 원문 | 설명 |
 |------|------|------|
@@ -763,11 +883,11 @@ Namespace: `"nexio"`
 | HEX 인코딩 | Hexadecimal | 바이너리 데이터를 16진수 문자열로 변환하는 방식. 예: `0x48 0x65` → `"4865"` |
 | Ring Buffer | Circular Buffer | 고정 크기의 원형 큐. 생산자(Producer)가 쓰고 소비자(Consumer)가 읽는 구조. head/tail 인덱스로 관리 |
 | JSON | JavaScript Object Notation | `key: value` 쌍으로 구성된 경량 데이터 교환 형식. 본 펌웨어의 모든 메시지에 사용 |
-| Preferences | — | ESP32 Arduino에서 NVS에 접근하기 위한 라이브러리. `begin(namespace, readOnly)`로 열고 `getString/putString` 등으로读写 |
+| Preferences | — | ESP32 Arduino에서 NVS에 접근하기 위한 라이브러리. `begin(namespace, readOnly)`로 열고 `getString/putString` 등으로 읽기/쓰기 |
 | NimBLE | — | Apache NimBLE 기반의 ESP32 BLE 라이브러리. 기존 Bluedroid보다 가볍고 메모리 효율이 좋음 |
 | ArduinoJson | — | JSON 문자열을 파싱하고 생성하는 C++ 라이브러리. `StaticJsonDocument<크기>`로 정적 메모리 할당 |
 | USB CDC | USB Communication Device Class | USB를 가상 시리얼 포트로 사용하는 방식. `Serial.begin()`으로 초기화 |
 | Serial1 | — | ESP32의 두 번째 하드웨어 UART. GPIO 20(RX), 21(TX)에 연결 |
 | GPIO | General Purpose Input/Output | 범용 입출력 핀. 디지털 신호를 읽거나 쓸 수 있는 물리적 핀 |
-| PlatformIO | — | Arduino/ESP32 개발을 위한 크로스 플랫폼 빌드 시스템. `platformio.ini`로 설정 관리 |
+| U8g2 | — | SSD1306 등 단색 OLED/ LCD를 구동하는 C++ 라이브러리. I2C/SPI 지원, 다양한 폰트 내장 |
 | OTA | Over-The-Air | 무선으로 펌웨어를 업데이트하는 기능. (본 펌웨어에서는 미사용) |

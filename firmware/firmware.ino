@@ -15,8 +15,14 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <U8g2lib.h>
+#include <Wire.h>
 
 #define LED_PIN              8
+#define OLED_SDA             5
+#define OLED_SCL             6
+#define OLED_WIDTH           72
+#define OLED_HEIGHT          40
 #define WIFI_TIMEOUT_MS      15000
 
 // ── 제품 UART (Serial1) ──────────────────────────────────────────────
@@ -50,6 +56,7 @@ static bool           gRegistered         = false;         // 서버가 ASSIGN_I
 static bool           gBleConnected       = false;         // BLE 링크 연결됨
 static bool           gBleAdvertising     = false;         // BLE 광고 중
 static volatile bool  gPendingRestart     = false;         // RESET/DISCARD → loop()에서 소비
+static bool           gProductConnected   = false;         // 제품 UART 연결 상태
 
 // ── WebSocket 상태 ──────────────────────────────────────────────────
 static bool           gWsConnected       = false;          // WS 링크 연결됨
@@ -59,6 +66,9 @@ static unsigned long  gWsConnectStart    = 0;              // gWs.begin() 호출
 static NimBLECharacteristic*  pTxChar  = nullptr;          // BLE notify 특성
 static WebSocketsClient       gWs;                          // WS 클라이언트 인스턴스
 static Preferences            prefs;                        // NVS 핸들
+static U8G2_SSD1306_128X64_NONAME_F_HW_I2C  u8g2(U8G2_R0, U8X8_PIN_NONE, OLED_SCL, OLED_SDA);
+static const int                              OLED_X_OFFSET = 30;
+static const int                              OLED_Y_OFFSET = 12;
 
 // ── 주기 타이머 ─────────────────────────────────────────────────────
 static unsigned long  gLastServerMsg  = 0;                 // 마지막 서버 HEARTBEAT 수신 시각
@@ -70,6 +80,7 @@ static void bleNotify(const char* msg);
 static void updateStatusFlags();
 static void wifiConnect(const char* ssid, const char* pass);
 static void wsToUart(const char* payload, size_t len);
+static void updateDisplay();
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -290,14 +301,11 @@ static void updateStatusFlags() {
 // wifiConnect: Wi-Fi 연결 시작
 //-----------------------------------------------------------------------------
 static void wifiConnect(const char* ssid, const char* pass) {
-  // WiFi 스택이 사용 중이면 완료될 때까지 대기 ("cannot set config" 방지)
   for (int i = 0; i < 50; ++i) {
     if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_DISCONNECTED)
       break;
     delay(100);
   }
-  WiFi.disconnect(true);
-  delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, pass);
   gWifiAttempted   = true;
@@ -332,8 +340,8 @@ static void sendRegister() {
   int p = snprintf(out, sizeof(out),
     "{\"type\":\"REGISTER\",\"version\":\"1.0\",\"timestamp\":%lu,"
     "\"boardId\":\"%s\",\"firmwareVersion\":\"1.0.0\","
-    "\"displayAvailable\":false,\"productConnected\":false",
-    millis(), bid);
+    "\"displayAvailable\":true,\"productConnected\":%s",
+    millis(), bid, gProductConnected ? "true" : "false");
   if (gUniqueId[0])
     p += snprintf(out + p, sizeof(out) - p, ",\"uniqueId\":\"%s\"", gUniqueId);
   snprintf(out + p, sizeof(out) - p, "}");
@@ -456,6 +464,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
 static void uartToWs() {
   while (Serial1.available()) {
     uint8_t b      = Serial1.read();
+    if (!gProductConnected) { gProductConnected = true; updateDisplay(); }
     size_t  next   = (uartHead + 1) % UART_BUF_SIZE;
     if (next != uartTail) {
       uartRing[uartHead] = b;
@@ -505,7 +514,63 @@ static void wsToUart(const char* payload, size_t len) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //
-//          [6] 초기화 — setup()     
+//          [6] OLED   — OLED 초기화 및 표시 갱신
+//
+//
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+//-----------------------------------------------------------------------------
+// oledInit: SSD1306 72x40 OLED 초기화 (I2C: SDA=GPIO5, SCL=GPIO6)
+//-----------------------------------------------------------------------------
+static void oledInit() {
+  Wire.begin(OLED_SDA, OLED_SCL);
+  u8g2.begin();
+  u8g2.setContrast(255);
+  u8g2.setBusClock(400000);
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_5x7_tr);
+  u8g2.setCursor(OLED_X_OFFSET, OLED_Y_OFFSET + 14);
+  u8g2.print("Booting...");
+  u8g2.sendBuffer();
+}
+
+//-----------------------------------------------------------------------------
+// updateDisplay: OLED 상단 [W][S][P] 상태 + 하단 Unique ID
+//-----------------------------------------------------------------------------
+static void updateDisplay() {
+  u8g2.clearBuffer();
+
+  // ── 하단: [W][S][P] (연결 안 되면 글자 생략) ──────────────────────────
+  u8g2.setFont(u8g2_font_6x10_tr);
+  char status[16];
+  snprintf(status, sizeof(status), "[%c][%c][%c]",
+           gWifiConnected     ? 'W' : ' ',
+           gRegistered        ? 'S' : ' ',
+           gProductConnected  ? 'P' : ' ');
+  int sw = u8g2.getStrWidth(status);
+  u8g2.setCursor(OLED_X_OFFSET + (OLED_WIDTH - sw) / 2, OLED_Y_OFFSET + 48);
+  u8g2.print(status);
+
+  // ── 상단: Unique ID ─────────────────────────────────────────────────
+  u8g2.setFont(u8g2_font_logisoso24_tf);
+  char id[8];
+  if (gUniqueId[0])
+    snprintf(id, sizeof(id), "%s", gUniqueId);
+  else
+    snprintf(id, sizeof(id), "----");
+  int iw = u8g2.getStrWidth(id);
+  u8g2.setCursor(OLED_X_OFFSET + (OLED_WIDTH - iw) / 2, OLED_Y_OFFSET + 36);
+  u8g2.print(id);
+
+  u8g2.sendBuffer();
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+//
+//
+//          [7] 초기화 — setup()     
 //
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -518,6 +583,7 @@ void setup() {
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+
 
   // 저장된 설정 복원 ──────────────────────────────────────────────────
   prefs.begin("nexio", true);
@@ -557,13 +623,15 @@ void setup() {
   svc->start();
 
   startBLEAdvertising();
+
+  oledInit();
 }
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 //
 //
-//          [7] 루프   — loop()  
+//          [8] 루프   — loop()  
 //
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -664,6 +732,8 @@ void loop() {
 
   // LED 표시 ───────────────────────────────────────────────────────────
   digitalWrite(LED_PIN, WiFi.status() == WL_CONNECTED ? HIGH : LOW);
+
+  updateDisplay();
 
   delay(100);
 }
