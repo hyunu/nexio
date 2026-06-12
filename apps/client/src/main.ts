@@ -1,11 +1,14 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
+import * as cp from 'child_process';
 import log from 'electron-log';
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
+import { WebSocket as WSWebSocket } from 'ws';
+import { vuartManager } from './vuart/manager';
 
 let mainWindow: BrowserWindow | null = null;
-let ws: WebSocket | null = null;
+let ws: WSWebSocket | null = null;
 let serialPort: SerialPort | null = null;
 let parser: ReadlineParser | null = null;
 
@@ -16,8 +19,8 @@ log.info('Nexio Client starting...');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 720,
+    width: 1200,
+    height: 900,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -45,10 +48,19 @@ app.on('window-all-closed', () => {
   }
 });
 
+app.on('before-quit', async () => {
+  await vuartManager.cleanup();
+});
+
 ipcMain.handle('serial:list', async () => {
   try {
     const ports = await SerialPort.list();
-    return ports.map(p => ({ path: p.path, manufacturer: p.manufacturer }));
+    const result = ports.map(p => ({ path: p.path, manufacturer: p.manufacturer }));
+    const vuarts = vuartManager.list();
+    for (const v of vuarts) {
+      result.push({ path: v.clientPath, manufacturer: `vUART: ${v.id}` });
+    }
+    return result;
   } catch (err) {
     log.error('Serial list error:', err);
     return [];
@@ -97,9 +109,28 @@ ipcMain.handle('serial:close', async () => {
   return { success: false };
 });
 
+ipcMain.handle('vuart:create', async () => {
+  try {
+    const info = await vuartManager.create();
+    return { success: true, data: info };
+  } catch (err) {
+    log.error('vUART create error:', err);
+    return { success: false, error: String(err) };
+  }
+});
+
+ipcMain.handle('vuart:list', async () => {
+  return vuartManager.list();
+});
+
+ipcMain.handle('vuart:delete', async (_, id: string) => {
+  const ok = await vuartManager.delete(id);
+  return { success: ok };
+});
+
 ipcMain.handle('ws:connect', async (_, url: string) => {
   try {
-    ws = new WebSocket(url);
+    ws = new WSWebSocket(url);
 
     ws.onopen = () => {
       if (mainWindow) {
@@ -131,7 +162,7 @@ ipcMain.handle('ws:connect', async (_, url: string) => {
 });
 
 ipcMain.handle('ws:send', async (_, message: string) => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WSWebSocket.OPEN) {
     ws.send(message);
     return { success: true };
   }
@@ -147,20 +178,18 @@ ipcMain.handle('ws:close', async () => {
 });
 
 ipcMain.handle('ws:isConnected', async () => {
-  return ws && ws.readyState === WebSocket.OPEN;
+  return ws && ws.readyState === WSWebSocket.OPEN;
 });
-
-const API_BASE = 'http://localhost:10008/api';
 
 const http = require('http');
 
-function apiPost(path: string, body: object): Promise<any> {
+function apiPost(hostname: string, port: number, path_: string, body: object): Promise<any> {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const options = {
-      hostname: 'localhost',
-      port: 10008,
-      path: `/api${path}`,
+      hostname,
+      port,
+      path: `/api${path_}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -184,9 +213,19 @@ function apiPost(path: string, body: object): Promise<any> {
   });
 }
 
-ipcMain.handle('auth:login', async (_, { username, password }) => {
+function parseServerUrl(url: string): { hostname: string; port: number } {
   try {
-    const { ok, data } = await apiPost('/auth/login', { username, password });
+    const u = new URL(url);
+    return { hostname: u.hostname, port: parseInt(u.port || '10008', 10) };
+  } catch {
+    return { hostname: 'localhost', port: 10008 };
+  }
+}
+
+ipcMain.handle('auth:login', async (_, { username, password, serverUrl }) => {
+  try {
+    const { hostname, port } = parseServerUrl(serverUrl || 'http://localhost:10008');
+    const { ok, data } = await apiPost(hostname, port, '/auth/login', { username, password });
     if (!ok) {
       return { success: false, error: data.message || 'Login failed' };
     }
@@ -198,9 +237,10 @@ ipcMain.handle('auth:login', async (_, { username, password }) => {
   }
 });
 
-ipcMain.handle('auth:register', async (_, { username, password, email, orgName }) => {
+ipcMain.handle('auth:register', async (_, { username, password, email, orgName, serverUrl }) => {
   try {
-    const { ok, data } = await apiPost('/auth/register', { username, password, email, orgName });
+    const { hostname, port } = parseServerUrl(serverUrl || 'http://localhost:10008');
+    const { ok, data } = await apiPost(hostname, port, '/auth/register', { username, password, email, orgName });
     if (!ok) {
       return { success: false, error: data.message || 'Registration failed' };
     }
@@ -210,4 +250,16 @@ ipcMain.handle('auth:register', async (_, { username, password, email, orgName }
     log.error('auth:register error:', err);
     return { success: false, error: String(err) };
   }
+});
+
+ipcMain.handle('system:checkSocat', async () => {
+  return new Promise((resolve) => {
+    cp.exec('which socat', (error, stdout) => {
+      resolve({ installed: !error, path: error ? null : stdout.trim() });
+    });
+  });
+});
+
+ipcMain.handle('system:getPlatform', async () => {
+  return { platform: process.platform, arch: process.arch };
 });

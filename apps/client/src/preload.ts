@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('serial:data', (_, data) => callback(data));
     },
   },
+  vuart: {
+    create: () => ipcRenderer.invoke('vuart:create'),
+    list: () => ipcRenderer.invoke('vuart:list'),
+    delete: (id: string) => ipcRenderer.invoke('vuart:delete', id),
+  },
   ws: {
     connect: (url: string) => ipcRenderer.invoke('ws:connect', url),
     send: (message: string) => ipcRenderer.invoke('ws:send', message),
@@ -27,9 +32,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   auth: {
-    login: (credentials: { username: string; password: string }) =>
+    login: (credentials: { username: string; password: string; serverUrl?: string }) =>
       ipcRenderer.invoke('auth:login', credentials),
-    register: (data: { username: string; password: string; email: string; orgName: string }) =>
+    register: (data: { username: string; password: string; email: string; orgName: string; serverUrl?: string }) =>
       ipcRenderer.invoke('auth:register', data),
+  },
+  system: {
+    checkSocat: () => ipcRenderer.invoke('system:checkSocat'),
+    getPlatform: () => ipcRenderer.invoke('system:getPlatform'),
   },
 });
