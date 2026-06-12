@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as cp from 'child_process';
 import log from 'electron-log';
 import { SerialPort } from 'serialport';
@@ -11,11 +12,21 @@ let mainWindow: BrowserWindow | null = null;
 let ws: WSWebSocket | null = null;
 let serialPort: SerialPort | null = null;
 let parser: ReadlineParser | null = null;
+let logFilePath: string = '';
 
 const isDev = !app.isPackaged && process.env.NODE_ENV !== 'production';
 
 log.initialize();
 log.info('Nexio Client starting...');
+
+function initLogFile() {
+  const logsDir = path.join(app.getPath('userData'), 'logs');
+  if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  logFilePath = path.join(logsDir, `session-${ts}.log`);
+  fs.writeFileSync(logFilePath, `=== Nexio Client Log ${new Date().toISOString()} ===\n`);
+  log.info('Log file:', logFilePath);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -40,7 +51,7 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => { initLogFile(); createWindow(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -93,9 +104,9 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
   }
 });
 
-ipcMain.handle('serial:write', async (_, data: string) => {
+ipcMain.handle('serial:write', async (_, data: number[]) => {
   if (serialPort && serialPort.isOpen) {
-    serialPort.write(data);
+    serialPort.write(Buffer.from(data));
     return { success: true };
   }
   return { success: false, error: 'Port not open' };
@@ -262,4 +273,21 @@ ipcMain.handle('system:checkSocat', async () => {
 
 ipcMain.handle('system:getPlatform', async () => {
   return { platform: process.platform, arch: process.arch };
+});
+
+ipcMain.handle('log:open', async () => {
+  const dir = path.join(app.getPath('userData'), 'logs');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  shell.openPath(dir);
+  return { success: true };
+});
+
+ipcMain.handle('log:write', async (_, entry: { ts: number; type: string; msg: string }) => {
+  if (!logFilePath) return { success: false };
+  try {
+    const d = new Date(entry.ts);
+    const time = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+    fs.appendFileSync(logFilePath, `[${time}] [${entry.type}] ${entry.msg}\n`);
+    return { success: true };
+  } catch { return { success: false }; }
 });

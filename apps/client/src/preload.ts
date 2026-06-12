@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: () => ipcRenderer.invoke('serial:list'),
     open: (options: { path: string; baudRate: number }) =>
       ipcRenderer.invoke('serial:open', options),
-    write: (data: string) => ipcRenderer.invoke('serial:write', data),
+    write: (data: number[]) => ipcRenderer.invoke('serial:write', data),
     close: () => ipcRenderer.invoke('serial:close'),
     onData: (callback: (data: string) => void) => {
       ipcRenderer.on('serial:data', (_, data) => callback(data));
@@ -40,5 +40,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   system: {
     checkSocat: () => ipcRenderer.invoke('system:checkSocat'),
     getPlatform: () => ipcRenderer.invoke('system:getPlatform'),
+  },
+  log: {
+    write: (entry: { ts: number; type: string; msg: string }) => ipcRenderer.invoke('log:write', entry),
+    open: () => ipcRenderer.invoke('log:open'),
   },
 });

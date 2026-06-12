@@ -6,7 +6,7 @@ declare global {
       serial: {
         list: () => Promise<{ path: string; manufacturer: string }[]>;
         open: (options: { path: string; baudRate: number }) => Promise<{ success: boolean; error?: string }>;
-        write: (data: string) => Promise<{ success: boolean; error?: string }>;
+        write: (data: number[]) => Promise<{ success: boolean; error?: string }>;
         close: () => Promise<{ success: boolean }>;
         onData: (callback: (data: string) => void) => void;
       };
@@ -38,6 +38,10 @@ declare global {
         checkSocat: () => Promise<{ installed: boolean; path: string | null }>;
         getPlatform: () => Promise<{ platform: string; arch: string }>;
       };
+      log: {
+        write: (entry: { ts: number; type: string; msg: string }) => Promise<{ success: boolean }>;
+        open: () => Promise<{ success: boolean }>;
+      };
     };
   }
 }
@@ -67,6 +71,7 @@ interface Settings {
 
 const LS_AUTH_KEY = 'nexio_auth';
 const LS_SETTINGS_KEY = 'nexio_settings';
+const MAX_LOG_COUNT = 50000;
 
 const defaultSettings: Settings = {
   serverUrl: 'ws://localhost:10008/ws/client',
@@ -158,7 +163,9 @@ function App() {
   }, [auth]);
 
   function addLog(type: LogType, msg: string) {
-    setLogs(prev => [...prev, { ts: Date.now(), type, msg }]);
+    const entry = { ts: Date.now(), type, msg };
+    setLogs(prev => prev.length >= MAX_LOG_COUNT ? [...prev.slice(1), entry] : [...prev, entry]);
+    window.electronAPI.log.write(entry);
   }
 
   function setupListeners() {
@@ -180,10 +187,14 @@ function App() {
     });
 
     window.electronAPI.serial.onData((data) => {
-      let decoded: string;
-      try { decoded = atob(data); } catch { decoded = data; }
-      sendDataToServer(decoded);
-      addLog('rx_device', decoded);
+      let bytes: number[];
+      try { bytes = base64ToBytes(data); } catch { bytes = strToBytes(data); }
+      const b64 = bytesToBase64(bytes);
+      if (serverStatus === 'connected' && boardInfo) {
+        const msg = { type: 'DATA_RELAY', version: '1.0', timestamp: Date.now(), sessionId: boardInfo.sessionId, sourceId: 'CLIENT', direction: 'C_TO_B', payload: b64 };
+        window.electronAPI.ws.send(JSON.stringify(msg));
+      }
+      addLog('rx_device', data);
     });
 
     return () => {
@@ -278,11 +289,12 @@ function App() {
         addLog('info', `Authenticated as ${auth?.username}`);
       }
       if (msg.type === 'DATA_RELAY' && msg.direction === 'B_TO_C') {
-        const decoded = atob(msg.payload);
+        const bytes = base64ToBytes(msg.payload);
         if (deviceStatus === 'connected') {
-          window.electronAPI.serial.write(decoded);
+          window.electronAPI.serial.write(bytes);
         }
-        addLog('rx_server', decoded);
+        const display = msg.hexDisplay || msg.payload;
+        addLog('rx_server', display);
       }
       if (msg.type === 'ERROR') {
         addLog('error', `Server: ${msg.message}`);
@@ -294,20 +306,48 @@ function App() {
     } catch {}
   }
 
-  function tryHexEncode(data: string): { ok: boolean; payload: string } {
-    if (!hexMode) return { ok: true, payload: data };
+  function strToBytes(s: string): number[] {
+    const bytes: number[] = [];
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c > 255) {
+        bytes.push((c >> 8) & 0xff);
+        bytes.push(c & 0xff);
+      } else {
+        bytes.push(c);
+      }
+    }
+    return bytes;
+  }
+
+  function tryHexEncode(data: string): { ok: boolean; payload: number[] } {
+    if (!hexMode) { const b = strToBytes(data); b.push(0x0a); return { ok: true, payload: b }; }
     const hex = data.replace(/\s+/g, '');
-    if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length === 0) return { ok: false, payload: data };
-    const bytes = [];
+    if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length === 0) return { ok: false, payload: [] };
+    const bytes: number[] = [];
     for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substring(i, i + 2), 16));
-    return { ok: true, payload: String.fromCharCode(...bytes) };
+    bytes.push(0x0a);
+    return { ok: true, payload: bytes };
+  }
+
+  function bytesToBase64(bytes: number[]): string {
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary);
+  }
+
+  function base64ToBytes(b64: string): number[] {
+    const binary = atob(b64);
+    const bytes: number[] = [];
+    for (let i = 0; i < binary.length; i++) bytes.push(binary.charCodeAt(i));
+    return bytes;
   }
 
   async function sendDataToServer(data: string) {
     if (!data.trim() || serverStatus !== 'connected' || !boardInfo) return;
     const { ok, payload } = tryHexEncode(data);
     if (!ok) { addLog('error', 'HEX: invalid hex string'); return; }
-    const base64 = btoa(payload);
+    const base64 = bytesToBase64(payload);
     const msg = { type: 'DATA_RELAY', version: '1.0', timestamp: Date.now(), sessionId: boardInfo.sessionId, sourceId: 'CLIENT', direction: 'C_TO_B', payload: base64 };
     await window.electronAPI.ws.send(JSON.stringify(msg));
     addLog('tx_server', data);
@@ -317,7 +357,7 @@ function App() {
     if (!data.trim() || deviceStatus !== 'connected') return;
     const { ok, payload } = tryHexEncode(data);
     if (!ok) { addLog('error', 'HEX: invalid hex string'); return; }
-    await window.electronAPI.serial.write(payload + '\n');
+    await window.electronAPI.serial.write(payload);
     addLog('tx_device', data);
   }
 
@@ -550,6 +590,7 @@ function App() {
         <div className="log-footer">
           <div className="log-actions">
             <button className="log-toggle" onClick={() => setLogs([])}>CLEAR</button>
+            <button className="log-toggle" onClick={() => window.electronAPI.log.open()}>OPEN LOG</button>
           </div>
         </div>
       </div>
