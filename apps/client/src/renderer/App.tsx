@@ -366,6 +366,36 @@ function App() {
     autoConnectRef.current = false;
   }
 
+  function settingsModal() {
+    return (
+      <div className="modal-overlay" onClick={() => setShowSettings(false)}>
+        <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal-header">
+            <span>Settings</span>
+            <button className="icon-btn" onClick={() => setShowSettings(false)}>✕</button>
+          </div>
+          <div className="modal-body">
+            <div className="settings-field">
+              <label>Server URL</label>
+              <input type="text" value={settingsDraft.serverUrl} onChange={e => setSettingsDraft({ ...settingsDraft, serverUrl: e.target.value })} />
+            </div>
+            <div className="settings-field">
+              <label>Theme</label>
+              <select value={settingsDraft.theme} onChange={e => setSettingsDraft({ ...settingsDraft, theme: e.target.value as 'dark' | 'light' })}>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </div>
+          </div>
+          <div className="modal-footer">
+            <button className="modal-btn" onClick={() => setShowSettings(false)}>Cancel</button>
+            <button className="modal-btn primary" onClick={saveSettings}>Save & Reconnect</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function logContent(entry: LogEntry): string {
     const prefix = { 'info': '●', 'tx_server': '→ SV', 'tx_device': '→ DV', 'rx_server': '← SV', 'rx_device': '← DV', 'error': '✕' }[entry.type];
     return `${prefix} ${entry.msg}`;
@@ -374,6 +404,9 @@ function App() {
   if (!auth) {
     return (
       <div className={`auth-container theme-${settings.theme}`}>
+        <div style={{position:'fixed',top:12,right:16,zIndex:200}}>
+          <button className="icon-btn" onClick={() => { setSettingsDraft({ ...settings }); setShowSettings(true); scanPorts(); }} title="Settings"><span className="settings-icon">⛭</span></button>
+        </div>
         <div className="auth-card">
           <div className="auth-header">
             <div className="logo">N</div>
@@ -400,6 +433,7 @@ function App() {
             </form>
           )}
         </div>
+        {showSettings && settingsModal()}
       </div>
     );
   }
@@ -520,33 +554,7 @@ function App() {
         </div>
       </div>
 
-      {showSettings && (
-        <div className="modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
-              <span>Settings</span>
-              <button className="icon-btn" onClick={() => setShowSettings(false)}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="settings-field">
-                <label>Server URL</label>
-                <input type="text" value={settingsDraft.serverUrl} onChange={e => setSettingsDraft({ ...settingsDraft, serverUrl: e.target.value })} />
-              </div>
-              <div className="settings-field">
-                <label>Theme</label>
-                <select value={settingsDraft.theme} onChange={e => setSettingsDraft({ ...settingsDraft, theme: e.target.value as 'dark' | 'light' })}>
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                </select>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="modal-btn" onClick={() => setShowSettings(false)}>Cancel</button>
-              <button className="modal-btn primary" onClick={saveSettings}>Save & Reconnect</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {showSettings && settingsModal()}
     </div>
   );
 }
