@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#312E81"/>
+      <stop offset="30%" stop-color="#1E1B4B"/>
+      <stop offset="100%" stop-color="#0B0914"/>
+    </linearGradient>
+    <linearGradient id="bgShine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <linearGradient id="nFill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="35%" stop-color="#E8EDFF"/>
+      <stop offset="100%" stop-color="#A5B4FC"/>
+    </linearGradient>
+    <linearGradient id="nHl" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="dot" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#D0D5FF"/>
+      <stop offset="50%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#4F46E5"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 배경 그림자 -->
+  <rect x="14" y="14" width="996" height="996" rx="218" fill="#000" opacity="0.25"/>
+
+  <!-- 메인 배경 -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+
+  <!-- 상단 광택 -->
+  <rect x="0" y="0" width="1024" height="512" rx="224" fill="url(#bgShine)"/>
+
+  <!-- N 그림자 레이어 -->
+  <g filter="url(#shadow)">
+    <!-- 좌측 세로 -->
+    <rect x="296" y="240" width="56" height="544" rx="28" fill="url(#nFill)"/>
+    <!-- 우측 세로 -->
+    <rect x="672" y="240" width="56" height="544" rx="28" fill="url(#nFill)"/>
+    <!-- 대각선 -->
+    <line x1="324" y1="276" x2="700" y2="756" stroke="url(#nFill)" stroke-width="56" stroke-linecap="round"/>
+  </g>
+
+  <!-- N 내부 상단 하이라이트 -->
+  <g opacity="0.35">
+    <rect x="296" y="240" width="56" height="272" rx="28" fill="none" stroke="#FFFFFF" stroke-width="3"/>
+    <rect x="672" y="240" width="56" height="272" rx="28" fill="none" stroke="#FFFFFF" stroke-width="3"/>
+    <line x1="324" y1="276" x2="512" y2="516" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- 릴레이 노드 -->
+  <g filter="url(#shadow)">
+    <circle cx="512" cy="516" r="18" fill="url(#dot)"/>
+    <circle cx="512" cy="516" r="7" fill="#FFFFFF" opacity="0.9"/>
+    <ellipse cx="506" cy="510" rx="5" ry="3" fill="#FFFFFF" opacity="0.45" transform="rotate(-25, 506, 510)"/>
+  </g>
+</svg>

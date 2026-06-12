@@ -41,6 +41,12 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
-    ]
+    ],
+    "icon": "assets/icons/icon.png",
+    "mac": {
+      "target": ["dmg"],
+      "icon": "assets/icons/icon.png",
+      "identity": null
+    }
   }
 }
