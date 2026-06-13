@@ -130,14 +130,22 @@ body {
   background: var(--accent-green);
   box-shadow: 0 0 6px rgba(63,185,80,0.5);
 }
+.pipeline-dot.off {
+  background: var(--accent-red, #e74c3c);
+  box-shadow: 0 0 6px rgba(231,76,60,0.4);
+}
 .pipeline-label { font-size: 10px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
 .pipeline-tag {
   font-size: 9px; font-family: 'JetBrains Mono', monospace;
   background: var(--bg-subtle); color: var(--accent-blue); padding: 1px 5px; border-radius: 3px;
   max-width: 180px; overflow: hidden; text-overflow: ellipsis;
 }
+.pipeline-tag.reason {
+  color: var(--accent-red, #e74c3c);
+  background: color-mix(in srgb, var(--accent-red, #e74c3c) 10%, transparent);
+}
 .pipeline-line {
-  width: 36px; height: 2px; background: var(--border-strong); margin: 0 4px;
+  flex: 0 0 36px; height: 2px; background: var(--border-strong); margin: 0 4px;
   position: relative;
 }
 

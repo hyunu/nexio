@@ -41,7 +41,7 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
@@ -66,6 +66,7 @@ app.on('before-quit', async () => {
 ipcMain.handle('serial:list', async () => {
   try {
     const ports = await SerialPort.list();
+    const knownPaths = new Set(ports.map(p => p.path));
     const result = ports.map(p => ({ path: p.path, manufacturer: p.manufacturer }));
     const vuarts = vuartManager.list();
     for (const v of vuarts) {
@@ -86,7 +87,7 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
 
     serialPort = new SerialPort({
       path: portPath,
-      baudRate: baudRate || 115200,
+      baudRate: baudRate || 19200,
     });
 
     parser = serialPort.pipe(new ReadlineParser({ delimiter: '\r\n' }));
@@ -94,6 +95,20 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
     parser.on('data', (data: string) => {
       if (mainWindow) {
         mainWindow.webContents.send('serial:data', data);
+      }
+    });
+
+    serialPort.on('close', () => {
+      log.info('Serial port closed');
+      if (mainWindow) {
+        mainWindow.webContents.send('serial:disconnected');
+      }
+    });
+
+    serialPort.on('error', (err) => {
+      log.error('Serial port error:', err.message);
+      if (mainWindow) {
+        mainWindow.webContents.send('serial:disconnected');
       }
     });
 

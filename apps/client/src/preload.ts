@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onData: (callback: (data: string) => void) => {
       ipcRenderer.on('serial:data', (_, data) => callback(data));
     },
+    onDisconnected: (callback: () => void) => {
+      ipcRenderer.on('serial:disconnected', () => callback());
+    },
   },
   vuart: {
     create: () => ipcRenderer.invoke('vuart:create'),

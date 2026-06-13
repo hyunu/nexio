@@ -9,6 +9,7 @@ declare global {
         write: (data: number[]) => Promise<{ success: boolean; error?: string }>;
         close: () => Promise<{ success: boolean }>;
         onData: (callback: (data: string) => void) => void;
+        onDisconnected: (callback: () => void) => void;
       };
       vuart: {
         create: () => Promise<{ success: boolean; data?: { id: string; clientPath: string; devicePath: string; createdAt: number }; error?: string }>;
@@ -75,7 +76,7 @@ const MAX_LOG_COUNT = 50000;
 
 const defaultSettings: Settings = {
   serverUrl: 'ws://localhost:10008/ws/client',
-  baudRate: 115200,
+  baudRate: 19200,
   serialPortPath: '',
   theme: 'dark',
 };
@@ -108,6 +109,7 @@ function extractHttpUrl(wsUrl: string): string {
 
 function App() {
   const [auth, setAuth] = useState<AuthInfo | null>(loadAuth);
+  const authRef = useRef(auth);
   const [settings, setSettings] = useState<Settings>(() => {
     const s = loadSettings();
     document.body.className = `theme-${s.theme}`;
@@ -127,10 +129,16 @@ function App() {
   const [authError, setAuthError] = useState('');
 
   const [serverStatus, setServerStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'failed'>('disconnected');
-  const [boardInfo, setBoardInfo] = useState<{ boardId: string; sessionId: string; expiresAt: number } | null>(null);
+  const serverStatusRef = useRef(serverStatus);
+  const [boardInfo, setBoardInfo] = useState<{ boardId: string; sessionId: string; expiresAt: number; productConnected?: boolean } | null>(null);
+  const boardInfoRef = useRef(boardInfo);
+  const [boardDisconnectReason, setBoardDisconnectReason] = useState<string | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const deviceStatusRef = useRef(deviceStatus);
 
   const [availablePorts, setAvailablePorts] = useState<{ path: string; manufacturer: string }[]>([]);
+  const [customPortInput, setCustomPortInput] = useState('');
+  const [isCustomPort, setIsCustomPort] = useState(false);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [hexMode, setHexMode] = useState(false);
@@ -141,6 +149,55 @@ function App() {
 
   const autoConnectRef = useRef(false);
   const boardRequestedRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startBoardRetry() {
+    if (retryTimerRef.current) return;
+    retryTimerRef.current = setInterval(() => {
+      if (!boardRequestedRef.current && authRef.current) {
+        requestBoard();
+      }
+    }, 2000);
+  }
+
+  function stopBoardRetry() {
+    if (retryTimerRef.current) {
+      clearInterval(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }
+
+  function startReconnectTimer() {
+    if (reconnectTimerRef.current) return;
+    reconnectTimerRef.current = setInterval(() => {
+      window.electronAPI.ws.connect(settings.serverUrl);
+    }, 5000);
+  }
+
+  function stopReconnectTimer() {
+    if (reconnectTimerRef.current) {
+      clearInterval(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }
+
+  useEffect(() => { serverStatusRef.current = serverStatus; }, [serverStatus]);
+  useEffect(() => { boardInfoRef.current = boardInfo; }, [boardInfo]);
+  useEffect(() => { deviceStatusRef.current = deviceStatus; }, [deviceStatus]);
+  useEffect(() => { authRef.current = auth; }, [auth]);
+
+  // Auto-retry board request when server is connected but no board assigned
+  useEffect(() => {
+    if (serverStatus === 'connected' && !boardInfo) {
+      // Fire once immediately, then poll every 5s
+      if (!boardRequestedRef.current) requestBoard();
+      startBoardRetry();
+    } else {
+      stopBoardRetry();
+    }
+    return stopBoardRetry;
+  }, [serverStatus, boardInfo]);
 
   useEffect(() => {
     if (logsRef.current) {
@@ -172,32 +229,41 @@ function App() {
     window.electronAPI.ws.onConnected(() => {
       setServerStatus('connected');
       addLog('info', 'Server connected');
+      stopReconnectTimer();
       boardRequestedRef.current = false;
       requestBoard();
     });
 
     window.electronAPI.ws.onDisconnected(() => {
       setServerStatus('disconnected');
+      if (boardInfoRef.current) setBoardDisconnectReason('Server disconnected');
       setBoardInfo(null);
       addLog('error', 'Server disconnected');
+      startReconnectTimer();
     });
 
     window.electronAPI.ws.onMessage((message) => {
       handleWsMessage(message);
     });
 
+    window.electronAPI.serial.onDisconnected(() => {
+      setDeviceStatus('disconnected');
+      addLog('error', 'Serial port disconnected');
+    });
+
     window.electronAPI.serial.onData((data) => {
       let bytes: number[];
       try { bytes = base64ToBytes(data); } catch { bytes = strToBytes(data); }
       const b64 = bytesToBase64(bytes);
-      if (serverStatus === 'connected' && boardInfo) {
-        const msg = { type: 'DATA_RELAY', version: '1.0', timestamp: Date.now(), sessionId: boardInfo.sessionId, sourceId: 'CLIENT', direction: 'C_TO_B', payload: b64 };
+      if (serverStatusRef.current === 'connected' && boardInfoRef.current) {
+        const msg = { type: 'DATA_RELAY', version: '1.0', timestamp: Date.now(), sessionId: boardInfoRef.current.sessionId, sourceId: 'CLIENT', direction: 'C_TO_B', payload: b64 };
         window.electronAPI.ws.send(JSON.stringify(msg));
       }
       addLog('rx_device', data);
     });
 
     return () => {
+      stopReconnectTimer();
       window.electronAPI.ws.close();
       window.electronAPI.serial.close();
     };
@@ -232,11 +298,11 @@ function App() {
   }
 
   async function requestBoard() {
-    if (!auth || boardRequestedRef.current) return;
+    if (!authRef.current || boardRequestedRef.current) return;
     boardRequestedRef.current = true;
     const msg = {
       type: 'REQUEST_BOARD', version: '1.0', timestamp: Date.now(),
-      clientId: `CLIENT-${Date.now()}`, sessionDuration: 3600, token: auth.token,
+      clientId: `CLIENT-${Date.now()}`, sessionDuration: 3600, token: authRef.current.token,
     };
     await window.electronAPI.ws.send(JSON.stringify(msg));
     addLog('info', 'Requesting board...');
@@ -271,6 +337,10 @@ function App() {
   async function scanPorts() {
     const ports = await window.electronAPI.serial.list();
     setAvailablePorts(ports);
+    if (settings.serialPortPath && !ports.some(p => p.path === settings.serialPortPath)) {
+      setIsCustomPort(true);
+      setCustomPortInput(settings.serialPortPath);
+    }
     addLog('info', `Found ${ports.length} serial port(s)`);
   }
 
@@ -278,19 +348,36 @@ function App() {
     try {
       const msg = JSON.parse(message);
       if (msg.type === 'BOARD_READY') {
-        setBoardInfo({ boardId: msg.boardId, sessionId: msg.sessionId, expiresAt: msg.expiresAt });
+        setBoardInfo({ boardId: msg.boardId, sessionId: msg.sessionId, expiresAt: msg.expiresAt, productConnected: msg.productConnected });
+        setBoardDisconnectReason(null);
         addLog('info', `Board ready: ${msg.boardId}`);
-        if (deviceStatus === 'connected') {
+        if (deviceStatusRef.current === 'connected') {
           const readyMsg = { type: 'CLIENT_READY', sessionId: msg.sessionId, timestamp: Date.now() };
           await window.electronAPI.ws.send(JSON.stringify(readyMsg));
         }
       }
+      if (msg.type === 'PRODUCT_STATUS') {
+        setBoardInfo(prev => prev ? { ...prev, productConnected: msg.connected } : prev);
+        addLog('info', `Product ${msg.connected ? 'connected' : 'disconnected'}`);
+      }
+      if (msg.type === 'CONTROL' && (msg.action === 'DISCONNECT' || msg.action === 'SESSION_TERMINATED')) {
+        setBoardInfo(null);
+        setBoardDisconnectReason(msg.reason || 'Session terminated');
+        boardRequestedRef.current = false;
+        addLog('error', `Session terminated: ${msg.reason || 'unknown'}`);
+      }
+      if (msg.type === 'END_SESSION') {
+        setBoardInfo(null);
+        setBoardDisconnectReason(msg.reason || 'Board disconnected');
+        boardRequestedRef.current = false;
+        addLog('error', `Board disconnected: ${msg.reason || 'unknown'}`);
+      }
       if (msg.type === 'AUTH_INFO') {
-        addLog('info', `Authenticated as ${auth?.username}`);
+        addLog('info', `Authenticated as ${authRef.current?.username}`);
       }
       if (msg.type === 'DATA_RELAY' && msg.direction === 'B_TO_C') {
         const bytes = base64ToBytes(msg.payload);
-        if (deviceStatus === 'connected') {
+        if (deviceStatusRef.current === 'connected') {
           window.electronAPI.serial.write(bytes);
         }
         const display = msg.hexDisplay || msg.payload;
@@ -298,9 +385,11 @@ function App() {
       }
       if (msg.type === 'ERROR') {
         addLog('error', `Server: ${msg.message}`);
-        if (msg.code === 'BOARD_NOT_FOUND') {
-          addLog('info', 'No idle board available, retrying in 5s...');
-          setTimeout(() => { boardRequestedRef.current = false; requestBoard(); }, 5000);
+        if (msg.code === 'BOARD_NOT_FOUND' || msg.code === 'SESSION_EXPIRED') {
+          setBoardInfo(null);
+          setBoardDisconnectReason(msg.code === 'SESSION_EXPIRED' ? 'Session expired' : null);
+          boardRequestedRef.current = false;
+          addLog('info', msg.code === 'SESSION_EXPIRED' ? 'Session expired' : 'No idle board available');
         }
       }
     } catch {}
@@ -401,6 +490,8 @@ function App() {
 
   function handleLogout() {
     localStorage.removeItem(LS_AUTH_KEY);
+    stopReconnectTimer();
+    stopBoardRetry();
     window.electronAPI.ws.close(); window.electronAPI.serial.close();
     setAuth(null); setServerStatus('disconnected'); setBoardInfo(null); setDeviceStatus('disconnected');
     autoConnectRef.current = false;
@@ -496,15 +587,18 @@ function App() {
       <div className="pipeline-section">
         <div className="pipeline">
           <div className="pipeline-end">
-            <span className={`pipeline-dot ${boardInfo ? 'on' : ''}`} />
+            <span className={`pipeline-dot ${boardInfo?.productConnected ? 'on' : 'off'}`} />
             <span className="pipeline-label">DEVICE 1</span>
+            {boardInfo && !boardInfo.productConnected && <span className="pipeline-tag reason">Not connected</span>}
+            {!boardInfo && <span className="pipeline-tag reason">{boardDisconnectReason || 'Offline'}</span>}
           </div>
           <div className="pipeline-line" />
           <div className="pipeline-node">
-            <span className={`pipeline-dot ${boardInfo ? 'on' : ''}`} />
+            <span className={`pipeline-dot ${boardInfo ? 'on' : 'off'}`} />
             <span className="pipeline-label">MODULE</span>
             {boardInfo && <span className="pipeline-tag">{boardInfo.boardId}</span>}
-            {!boardInfo && serverStatus === 'connected' && <span className="pipeline-tag wait">Waiting...</span>}
+            {!boardInfo && boardDisconnectReason && <span className="pipeline-tag reason">{boardDisconnectReason}</span>}
+            {!boardInfo && !boardDisconnectReason && serverStatus === 'connected' && <span className="pipeline-tag wait">Waiting...</span>}
           </div>
           <div className="pipeline-line" />
           <div className="pipeline-node">
@@ -530,18 +624,42 @@ function App() {
       <div className="port-section">
         <div className="port-row">
           <span className="port-label" style={{marginLeft:0}}>Serial Port</span>
-          <select className="port-select" value={settings.serialPortPath}
+          <select className="port-select" value={
+            isCustomPort ? '__custom__' : (availablePorts.some(p => p.path === settings.serialPortPath) ? settings.serialPortPath : '')}
             onChange={e => {
               if (deviceStatus === 'connected') disconnectSerial();
-              const newSettings = { ...settings, serialPortPath: e.target.value };
-              setSettings(newSettings);
-              localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(newSettings));
+              const v = e.target.value;
+              if (v === '__custom__') {
+                setIsCustomPort(true);
+                setCustomPortInput('');
+                const newSettings = { ...settings, serialPortPath: '' };
+                setSettings(newSettings);
+                localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(newSettings));
+              } else {
+                setIsCustomPort(false);
+                setCustomPortInput('');
+                const newSettings = { ...settings, serialPortPath: v };
+                setSettings(newSettings);
+                localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(newSettings));
+              }
             }}>
             <option value="">— Select —</option>
             {availablePorts.filter(p => !p.manufacturer?.startsWith('vUART:')).map(p => (
               <option key={p.path} value={p.path}>{p.path}{p.manufacturer ? ` (${p.manufacturer})` : ''}</option>
             ))}
+            <option value="__custom__">Custom</option>
           </select>
+          <input className="port-input" type="text" placeholder="/dev/tty..."
+            value={customPortInput}
+            onChange={e => {
+              if (deviceStatus === 'connected') disconnectSerial();
+              setCustomPortInput(e.target.value);
+              const newSettings = { ...settings, serialPortPath: e.target.value };
+              setSettings(newSettings);
+              localStorage.setItem(LS_SETTINGS_KEY, JSON.stringify(newSettings));
+            }}
+            style={{ width: 180, marginLeft: 4, padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#1e293b', color: '#e2e8f0', fontSize: 12, fontFamily: 'D2Coding, monospace', display: isCustomPort ? 'inline-block' : 'none' }}
+          />
           <button className="scan-btn" onClick={scanPorts}>Scan</button>
           <span className="port-label" style={{marginLeft:8}}>Baudrate</span>
           <select className="port-select baud" value={settings.baudRate} onChange={e => {
