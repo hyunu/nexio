@@ -100,6 +100,10 @@ interface BaseMessage {
   "payload": "base64encodedBinaryData=="
 }
 ```
+Note on payload encoding:
+- Boards (firmware) may send payloads to the Server as HEX-encoded strings (e.g. "48656C6C6F") when relaying raw UART bytes.
+- The Server MUST normalize incoming payloads: if payload looks like HEX, convert to base64 before forwarding to Clients. Clients should expect base64-encoded payloads in DATA_RELAY messages and decode to binary for local use.
+- When Clients send DATA_RELAY messages to the Server destined for Boards, Clients SHOULD send payloads encoded in base64; the Server will forward to Boards using whatever encoding is appropriate (currently server forwards base64 as-is or converts to HEX for firmware, see implementation notes).
 
 ### REQUEST_BOARD (Client → Server)
 
@@ -186,8 +190,8 @@ const BLE_UUID = {
 };
 
 // Timing
-const HEARTBEAT_INTERVAL_MS = 30000;
-const HEARTBEAT_TIMEOUT_MS = 60000;
+const HEARTBEAT_INTERVAL_MS = 5000;
+const HEARTBEAT_TIMEOUT_MS = 9000;
 const WIFI_RECONNECT_INTERVAL_MS = 3000;
 const WS_RECONNECT_INTERVAL_MS = 5000;
 ```

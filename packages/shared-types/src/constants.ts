@@ -13,6 +13,10 @@ export const BLE_UUID = {
 } as const;
 
 export const HEARTBEAT_INTERVAL_MS = 30000;
+// Heartbeat interval (how often endpoints send HEARTBEAT)
+// and heartbeat timeout (how long to wait before declaring a connection dead).
+// Use 5s interval and 9s timeout to match firmware/clients expectations.
+export const HEARTBEAT_INTERVAL_MS = 5000;
 export const HEARTBEAT_TIMEOUT_MS = 9000;
 export const WIFI_RECONNECT_INTERVAL_MS = 3000;
 export const WS_RECONNECT_INTERVAL_MS = 5000;
