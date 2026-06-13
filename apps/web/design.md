@@ -2,147 +2,94 @@
 
 ## Overview
 
-React-based web dashboard for monitoring and managing boards, clients, and sessions in real-time.
+React-based web dashboard served by the Fastify server as a static SPA. Monitors and manages boards, clients, and sessions in real-time via REST API + optional WebSocket monitor connection.
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph "Web Dashboard"
-        UI[React SPA]
-        API[REST API Client]
-        WS[WebSocket Client]
-    end
+The dashboard is built with React and served as static files from `apps/web/dist/`. The Fastify server registers `@fastify/static` at runtime and serves `index.html` as SPA fallback for unknown GET routes.
 
-    subgraph "Server"
-        HTTP[Fastify HTTP]
-        WS_S[WebSocket Server]
-    end
-
-    UI --> HTTP
-    UI --> WS_S
-
-    HTTP <--> DB[(MySQL)]
+```
+Browser ──GET /──→ Fastify ──→ dist/index.html
+         ──GET /api/boards──→ Fastify ──→ MySQL
+         ──WS /ws/monitor───→ Fastify ──→ Board/Client events
 ```
 
 ## Dashboard Layout
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Nexio Dashboard                              [🔄]  │
-├──────────────────────────────────────────────────────┤
-│                                                      │
-│  ┌────────────────────┐  ┌────────────────────┐     │
-│  │ Boards (3)         │  │ Clients (2)        │     │
-│  │                    │  │                    │     │
-│  │ 🔵 BOARD-0001 IDLE │  │ ● CLIENT-1 CONNECTED│    │
-│  │ 🟢 BOARD-0002 BUSY  │  │ ● CLIENT-2 CONNECTED│    │
-│  │ 🔴 BOARD-0003 OFF   │  │                    │     │
-│  └────────────────────┘  └────────────────────┘     │
-│                                                      │
-│  ┌─ Create Session ───────────────────────────────┐ │
-│  │ Board: [BOARD-0001 ▼]                          │ │
-│  │ Client: [CLIENT-1 ▼]                           │ │
-│  │ [Connect]                                      │ │
-│  └───────────────────────────────────────────────┘ │
-│                                                      │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│  Nexio Dashboard                                [🔄]  │
+├────────────────────────────────────────────────────────┤
+│                                                        │
+│  ┌────────────────────┐  ┌────────────────────┐       │
+│  │ Boards (3)         │  │ Clients (2)        │       │
+│  │ BOARD-0001 IDLE    │  │ CLIENT-1 CONNECTED │       │
+│  │ BOARD-0002 BUSY    │  │ CLIENT-2 CONNECTED │       │
+│  │ BOARD-0003 OFFLINE │  │                    │       │
+│  └────────────────────┘  └────────────────────┘       │
+│                                                        │
+│  ┌─ Create Session ─────────────────────────────────┐ │
+│  │ Board: [BOARD-0001 ▼]  Client: [CLIENT-1 ▼]     │ │
+│  │ [Connect]                                        │ │
+│  └─────────────────────────────────────────────────┘ │
+│                                                        │
+│  ┌─ Sessions ───────────────────────────────────────┐ │
+│  │ session-id │ BOARD-0001 │ CLIENT-1 │ ACTIVE      │ │
+│  │ session-id │ BOARD-0002 │ CLIENT-2 │ TERMINATED  │ │
+│  └─────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────┘
 ```
 
-## Board List Component
+## Features
 
-```
-┌────────────────────────────────────────┐
-│ Boards (3)                     [+ Add]│
-├────────────────────────────────────────┤
-│ Unique ID    │ Status │ Connected    │
-├────────────────────────────────────────┤
-│ BOARD-0001   │ IDLE   │ 12:00:00     │
-│ BOARD-0002   │ BUSY   │ 11:30:00     │
-│ BOARD-0003   │ OFFLINE│ 10:15:00     │
-└────────────────────────────────────────┘
-         [Reset] [Disconnect]
-```
+### Boards List
 
-## Client List Component
+- Table: Unique ID, MAC Address, Status, Firmware, Display Available, Location, Connected At
+- Status badges: IDLE (green), BUSY (yellow), OFFLINE (red), CLAIMED (blue), DISCARDED (gray)
+- Actions per board: Reset, Discard (sends CONTROL DISCARD via server → board WS)
 
-```
-┌────────────────────────────────────────┐
-│ Clients (2)                     [+ Add]│
-├────────────────────────────────────────┤
-│ Client ID     │ Status    │ Connected │
-├────────────────────────────────────────┤
-│ CLIENT-1      │ CONNECTED │ 12:00:00  │
-│ CLIENT-2      │ CONNECTED │ 11:45:00  │
-└────────────────────────────────────────┘
-         [Ping] [Disconnect]
-```
+### Clients List
 
-## Session Management
+- Table: Client ID, Username (linked User), Status, Connected At
+- Status badges: CONNECTED (green), DISCONNECTED (red)
+- Actions: Disconnect (sends CONTROL DISCONNECT via server → client WS)
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant Dashboard
-    participant API
-    participant Server
-    participant Board
-    participant Client
+### Users List
 
-    User->>Dashboard: Select Board & Client
-    Dashboard->>API: POST /api/sessions
-    API->>Server: Create session
-    Server->>Server: Validate board is IDLE
+- Table: Username, Email, Organization, Active toggle, Admin toggle
+- Actions: Toggle Active, Toggle Admin
+- Admin users have a badge
 
-    alt Success
-        Server->>DB: Create session record
-        Server->>Board: BOARD_READY
-        Server->>Client: BOARD_READY
-        Server-->>Dashboard: Session created
-        Dashboard->>User: Show success
-    else No idle board
-        Server-->>Dashboard: Error
-        Dashboard->>User: Show error
-    end
-```
+### Session Management
 
-## Control Actions
+- Create session: select IDLE board + connected client → POST `/api/sessions`
+- Terminate session: POST `/api/sessions/:id/terminate`
+- Delete session: DELETE `/api/sessions/:id`
 
-```mermaid
-graph TD
-    A[Control Action] --> B{Action Type}
-    B -->|RESET| C[Send to Board]
-    B -->|DISCONNECT| D[Send to Target]
-    B -->|PING| E[Send Ping]
+### Real-time Updates
 
-    C --> C1[Board: ESP.restart]
-    D --> D1[Close Connection]
-    E --> E1[Return PONG]
-```
-
-## API Integration
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/boards` | Get all boards |
-| GET | `/api/boards/idle` | Get idle boards |
-| GET | `/api/clients` | Get all clients |
-| POST | `/api/sessions` | Create session |
-| DELETE | `/api/sessions/:id` | Delete session |
-| POST | `/api/control` | Send control |
-
-## Real-time Updates
-
-- Auto-refresh every 5 seconds
-- WebSocket connection for live updates (optional)
-- Visual status indicators with colors
+- WebSocket connection to `/ws/monitor` for live board/client status changes
+- Periodic auto-refresh fallback
 
 ## Status Colors
 
-| Status | Color | Meaning |
-|--------|-------|---------|
-| IDLE | 🟢 Green | Board ready for use |
-| BUSY | 🟡 Yellow | Board in use |
-| OFFLINE | 🔴 Red | Board disconnected |
-| CONNECTED | 🟢 Green | Client connected |
-| DISCONNECTED | 🔴 Red | Client disconnected |
+| Status | Color | Entity |
+|--------|-------|--------|
+| IDLE | Green | Board ready |
+| BUSY | Yellow | Board in use |
+| OFFLINE | Red | Board disconnected |
+| CLAIMED | Blue | Board claimed (not yet registered) |
+| DISCARDED | Gray | Board discarded |
+| CONNECTED | Green | Client connected |
+| DISCONNECTED | Red | Client disconnected |
+
+## API Integration
+
+All data fetched via REST API from same origin. WS monitor for live updates.
+
+## Key Files
+
+| File | Contents |
+|------|----------|
+| `src/` | React components: BoardList, ClientList, UserList, Sessions |
+| `dist/` (build output) | Served by Fastify server at runtime |

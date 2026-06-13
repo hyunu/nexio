@@ -59,6 +59,11 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
   const logEndRef = useRef<HTMLDivElement>(null);
   const dataEndRef = useRef<HTMLDivElement>(null);
 
+  function fmtTime(ts: number) {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
+  }
+
   useEffect(() => {
     fetch(`${API_BASE}/boards/${boardId}`)
       .then(r => r.json())
@@ -82,7 +87,7 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
         if (msg.type === 'LOG') {
           setLogs(prev => [...prev.slice(-499), { id: ++logIdRef.current, timestamp: msg.timestamp, level: msg.level, message: msg.message, data: msg.data }]);
         } else if (msg.type === 'DATA_RELAY') {
-          setDataRelays(prev => [...prev.slice(-99), { id: ++dataIdRef.current, timestamp: msg.timestamp, direction: msg.direction, payload: msg.payload }]);
+          setDataRelays(prev => [...prev.slice(-99), { id: ++dataIdRef.current, timestamp: msg.timestamp || Date.now(), direction: msg.direction, payload: msg.payload }]);
         }
       } catch {}
     };
@@ -153,9 +158,9 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
             )}
             {dataRelays.map(d => (
               <div key={d.id} style={{ marginBottom: 4, padding: '2px 4px' }}>
-                <span style={{ color: '#475569' }}>[{new Date(d.timestamp).toLocaleTimeString()}]</span>{' '}
-                <span style={{ color: d.direction === 'B_TO_C' ? '#22d3ee' : '#f472b6', fontWeight: 600 }}>
-                  {d.direction === 'B_TO_C' ? '← 보드' : '→ 클라이언트'}
+                <span style={{ color: '#475569' }}>[{fmtTime(d.timestamp)}]</span>{' '}
+                <span style={{ color: d.direction === 'uart_to_server' || d.direction === 'B_TO_C' ? '#f472b6' : '#22d3ee', fontWeight: 600 }}>
+                  {d.direction === 'uart_to_server' || d.direction === 'B_TO_C' ? '[D1->D2]' : '[D2->D1]'}
                 </span>{' '}
                 <span style={{ color: '#cbd5e1' }}>
                   {d.payload?.substring(0, 200)}{(d.payload?.length || 0) > 200 ? '...' : ''}
@@ -182,7 +187,7 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
             )}
             {logs.map(l => (
               <div key={l.id} style={{ marginBottom: 2, padding: '1px 4px' }}>
-                <span style={{ color: '#475569' }}>[{new Date(l.timestamp).toLocaleTimeString()}]</span>{' '}
+                <span style={{ color: '#475569' }}>[{fmtTime(l.timestamp)}]</span>{' '}
                 <span style={{ color: levelColor[l.level] || '#22c55e', fontWeight: 600 }}>
                   {(l.level === 'error' ? '오류' : l.level === 'warn' ? '경고' : l.level === 'debug' ? '디버그' : '정보').padEnd(4)}
                 </span>{' '}
