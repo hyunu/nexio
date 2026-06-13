@@ -47,6 +47,64 @@ graph TB
 
 ---
 
+## 설계 보완 및 필수 수정 사항
+
+설계서를 코드로 정확히 재현하기 위해 아래 항목들을 명확히 하였고, 구현 시 해당 규격을 따르십시오.
+
+1) 인코딩(필수)
+ - UART ↔ WebSocket 페이로드는 HEX 인코딩을 사용함(예: "48656C6C6F"). 프로젝트 전체에서 HEX로 통일되었음.
+ - 이전에 사용되던 base64 방식은 사용하지 않음. 서버·클라이언트와 인터페이스할 때 반드시 HEX로 교환하세요.
+
+2) WebSocket 구현 명세 (필수)
+ - 라이브러리: `WebSocketsClient.h` 사용 (ESP32 Arduino 환경)
+ - 이벤트 함수 시그니처: `wsEvent(WStype_t type, uint8_t* payload, size_t length)` 형태로 처리
+ - 기본 WS 경로: `/ws/board` (URL 예시: `ws://HOST:PORT/ws/board`)
+ - 메시지 타입별 JSON 규격(아래 섹션 참조)을 엄격히 준수
+
+3) REGISTER / HEARTBEAT 기본값(필수)
+ - `version` 필드는 `"1.0"`으로 고정
+ - `displayAvailable`는 OLED 장착 보드는 `true`
+ - `productConnected`는 런타임 값(`gProductConnected`)을 반영
+
+4) StaticJsonDocument 크기 권장(권장)
+ - 짧은 메시지(REGISTER, HEARTBEAT, DISCARD_ACK): 128~256 바이트 권장
+ - 일반 텍스트/명령 처리: 512 바이트 권장
+ - 긴 payload 처리(DATA_RELAY 등): 768~1536 바이트 권장
+ - 코드에서는 예제별로 128/512/768이 혼용되므로 설계서와 일치시키도록 권장
+
+5) 타이밍 상수(코드 상수명 명시)
+ - `WIFI_TIMEOUT_MS` = 15000 (ms)
+ - `WS_RECONNECT_INTERVAL` = 5000 (ms)
+ - `REGISTER_RETRY_INTERVAL` = 3000 (ms)
+ - `HEARTBEAT_INTERVAL` = 5000 (ms)
+ - `LOOP_DELAY_MS` = 100 (ms)
+
+6) NVS (Preferences) 사용 패턴
+ - 읽기(boot 복원): `prefs.begin("nexio", true)` (read-only)
+ - 쓰기(온보딩/ASSIGN_ID): `prefs.begin("nexio", false)` (read/write)
+ - DISCARD 처리 시 `prefs.clear()` 호출 후 `prefs.end()`
+
+7) 빌드·디렉터리 권장 (프로젝트 정책)
+ - Arduino IDE로 개발 시: 단일 `firmware/firmware.ino` 파일을 권장
+ - PlatformIO를 사용하려면 `src/` 구조를 별도 유지하되, 본 설계서는 Arduino 단일 파일 구현을 1차 권장으로 명시
+
+8) 에러 처리·안전 검사(권장)
+ - JSON 필드 접근 전 `const char*`의 null 체크: `const char* t = doc["type"]; if (!t) return;`
+ - `strncpy`/`snprintf` 사용 시 버퍼 크기 검사 및 null 종료 보장
+ - deserializeJson 실패 시 조기 반환
+
+9) 라이브러리 및 최소 버전(권장)
+ - NimBLE-Arduino >= 1.4.0
+ - WebSockets (arduinoWebSockets) >= 0.5.2
+ - ArduinoJson >= 6.18.0
+ - U8g2 >= 2.29.10
+ - Preferences: ESP32 Arduino core 내장 (사용 중인 ESP32 코어 버전 명시 권장)
+
+10) 폰트/리소스(권장)
+ - `u8g2_font_logisoso24_tf`는 프로젝트에 포함되지 않을 수 있음. 빌드 실패 방지를 위해 대체 폰트(예: `u8g2_font_fub11_tf`)를 권고하거나 폰트 포함 방법을 문서화하세요.
+
+위 항목들은 코드와 설계서의 1:1 재현성을 보장하기 위한 필수·권장 변경입니다. 아래의 기존 하드웨어·모듈 문서가 이어집니다.
+
 ## 2. 하드웨어 구성
 
 ### 핀 배정
@@ -62,14 +120,14 @@ graph TB
 
 ### OLED — SSD1306 72×40
 
-SSD1306 128×64 드라이버 IC에 72×40 픽셀 글래스가 (30,12) 오프셋으로 본딩되어 있다. U8g2 라이브러리는 128×64 모드로 구동하며 소프트웨어적으로 (30,12)를 보정한다.
+72×40 픽셀 SSD1306 컨트롤러를 내장한 OLED 모듈. `U8G2_SSD1306_72X40_ER_F_HW_I2C` 드라이버를 사용하며 오프셋 없이 네이티브 72×40 프레임버퍼로 구동한다.
 
 | 항목 | 값 |
 |------|-----|
-| 라이브러리 | `U8g2` (`U8G2_SSD1306_128X64_NONAME_F_HW_I2C`) |
+| 라이브러리 | `U8g2` (`U8G2_SSD1306_72X40_ER_F_HW_I2C`) |
 | 생성자 인자 | `U8G2_R0, U8X8_PIN_NONE, SCL=6, SDA=5` |
-| X 오프셋 | 30 (`OLED_X_OFFSET`) |
-| Y 오프셋 | 12 (`OLED_Y_OFFSET`) |
+| X 오프셋 | 0 (네이티브 드라이버) |
+| Y 오프셋 | 0 (네이티브 드라이버) |
 | 가시 폭 | 72px (`OLED_WIDTH`) |
 | 가시 높이 | 40px (`OLED_HEIGHT`) |
 | I2C 속도 | 400kHz (`setBusClock`) |
@@ -82,7 +140,7 @@ SSD1306 128×64 드라이버 IC에 72×40 픽셀 글래스가 (30,12) 오프셋�
 | 인터페이스 | `Serial1` (하드웨어 UART1) |
 | TX 핀 | GPIO 21 (`PRODUCT_UART_TX`) |
 | RX 핀 | GPIO 20 (`PRODUCT_UART_RX`) |
-| 전송 속도 | 115200 baud (`PRODUCT_UART_BAUD`) |
+| 전송 속도 | 19200 baud (기본값, 온보딩 시 변경 가능) |
 | 데이터 비트 | 8 |
 | 패리티 | 없음 (`SERIAL_8N1`) |
 | 흐름 제어 | 없음 |
@@ -237,9 +295,7 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 
 | 변수 | 타입 | 설명 |
 |------|------|------|
-| `u8g2` | `U8G2_SSD1306_128X64_NONAME_F_HW_I2C` | OLED 제어 인스턴스 |
-| `OLED_X_OFFSET` | `const int` | 30 (128×64 버퍼 내 72×40 윈도우 X 시작) |
-| `OLED_Y_OFFSET` | `const int` | 12 (128×64 버퍼 내 72×40 윈도우 Y 시작) |
+| `u8g2` | `U8G2_SSD1306_72X40_ER_F_HW_I2C` | OLED 제어 인스턴스 (네이티브 72×40) |
 
 ### 타이머
 
@@ -281,7 +337,7 @@ static       size_t  uartTail         = 0;       // 소비자 인덱스 (버퍼 
 #define WIFI_TIMEOUT_MS  15000   // Wi-Fi 연결 시도 타임아웃 (ms)
 #define PRODUCT_UART_TX      21  // Serial1 TX 핀
 #define PRODUCT_UART_RX      20  // Serial1 RX 핀
-#define PRODUCT_UART_BAUD    115200  // UART 전송 속도
+#define PRODUCT_UART_BAUD    19200  // UART 전송 속도 (기본값, NVS "baud" 키로 오버라이드 가능)
 ```
 
 **전방 선언** — 아래 함수들이 본문보다 먼저 사용되므로 선언한다:
@@ -328,15 +384,16 @@ BLE로 수신한 JSON 문자열을 파싱하여 **두 가지 유형**을 처리:
   "ssid": "MyWiFi",
   "password": "secret123",
   "serverUrl": "ws://192.168.1.100:10008/ws/board",
-  "uniqueId": "0042"
+  "uniqueId": "0042",
+  "baudRate": 19200
 }
 ```
 
 처리 순서:
 1. 수신 전문을 USB CDC와 BLE Notify로 출력
 2. `gUniqueId` 갱신 (optional)
-3. NVS에 ssid/pass/url/uid 저장
-4. serverUrl에서 host + port 파싱
+3. NVS에 ssid/pass/url/uid/baud 저장
+4. baudRate가 다르면 `Serial1.begin(newBaud)`로 제품 UART 속도 변경
 5. `gOnboarded = true`, `updateStatusFlags()`
 6. 같은 SSID가 아니면 `wifiConnect()` 호출
 
@@ -496,33 +553,33 @@ graph LR
 
 #### `oledInit()`
 
-setup()에서 BLE 초기화 직후 호출된다.
+setup()에서 BLE 초기화 직후 호출된다. 72×40 네이티브 드라이버를 사용하며 별도의 I2C 초기화가 필요하지 않다 (`U8X8_PIN_NONE`으로 U8g2가 자체 I2C 초기화).
 
-1. `Wire.begin(OLED_SDA=5, OLED_SCL=6)` — I2C 시작
-2. `u8g2.begin()` — 디스플레이 초기화
-3. `u8g2.setContrast(255)` — 최대 밝기
-4. `u8g2.setBusClock(400000)` — I2C 400kHz
-5. `clearBuffer()` → `"Booting..."` 출력 → `sendBuffer()`
+1. `u8g2.begin()` — 디스플레이 초기화
+2. `u8g2.setContrast(255)` — 최대 밝기
+3. `u8g2.setBusClock(400000)` — I2C 400kHz
+4. `u8g2.clearBuffer()` → `u8g2.setFont(u8g2_font_5x7_tr)` → `u8g2.print("Booting...")` → `u8g2.sendBuffer()`
 
 #### `updateDisplay()`
 
 loop()에서 매 100ms마다 호출된다.
 
-**레이아웃 (128×64 버퍼 기준, (30,12) 오프셋 적용):**
+**레이아웃 (네이티브 72×40 버퍼):**
 
 ```
 ┌──────────────────────┐
-│      Unique ID       │  ← logisoso24 (24px), baseline Y=48
-│       (0042)         │
-├──────────────────────┤
-│   [W][S][P]          │  ← 6x10 (10px), baseline Y=60
+│      0042            │  ← 24px ID (logisoso24), Y=26
+│                      │
+│    [W][S][P]         │  ← 10px status (6x10), Y=38
 └──────────────────────┘
 ```
 
-- **상단**: `u8g2_font_logisoso24_tf` — Unique ID (없으면 `"----"`)
-- **하단**: `u8g2_font_6x10_tr` — `[W][S][P]` (연결 시에만 글자 표시)
+- **하단**(Y=26): `u8g2_font_6x10_tr` — `[W][S][P]` 상태 (중앙 정렬)
+- **상단**(Y=38): `u8g2_font_logisoso24_tf` — Unique ID (없으면 `"----"`, 중앙 정렬)
 
 `gProductConnected`가 UART 첫 바이트 수신 시 `true`로 설정되며, `[P]`가 활성화된다.
+
+참고: 72×40 네이티브 드라이버이므로 별도의 X/Y 오프셋 보정이 필요하지 않다. 이전 128×64+오프셋 방식에서 단순화되었다.
 
 ---
 
@@ -531,7 +588,7 @@ loop()에서 매 100ms마다 호출된다.
 ```mermaid
 graph TD
     START["시작"]
-    SERIAL["Serial(115200)<br/>Serial1(115200, 8N1, RX=20, TX=21)<br/>pinMode(LED, OUTPUT)"]
+    SERIAL["Serial(115200)<br/>Serial1(19200, 8N1, RX=20, TX=21)<br/>pinMode(LED, OUTPUT)"]
     WIFI_INIT["WiFi.persistent(false)<br/>WiFi.mode(WIFI_STA)"]
     NVS_READ["prefs.begin('nexio', true)<br/>ssid / pass / url / uid 읽기"]
     HAS_CONFIG{"ssid.length() > 0?"}
@@ -786,6 +843,7 @@ Namespace: `"nexio"`
 | `pass` | String | Wi-Fi 비밀번호 |
 | `url` | String | WebSocket 서버 URL |
 | `uid` | String | 서버 할당 고유 ID |
+| `baud` | ULong | 제품 UART Baud Rate (기본값: 19200) |
 
 읽기/쓰기 모드:
 
@@ -825,26 +883,27 @@ Namespace: `"nexio"`
 
 ### 레이아웃
 
-SSD1306 128×64 프레임버퍼에서 (30,12)~(101,51) 영역만 물리적으로 보인다.
+SSD1306 72×40 네이티브 프레임버퍼. 오프셋 보정 불필요.
 
 ```
-Buffer Y  Physical Y
-  12          0     ┌──────────────────────┐
-                     │      0042            │  ← logisoso24
-  36         24     │                      │
-                     ├──────────────────────┤
-  48         36     │   [W][S][P]           │  ← 6x10
-  52         40     └──────────────────────┘
+Physical Y
+   0     ┌──────────────────────┐
+         │    [W][S][P]         │  ← 6x10 (10px), Y=26
+  26     ├──────────────────────┤
+         │      0042            │  ← logisoso24 (24px), Y=38
+  38     └──────────────────────┘
 ```
 
 ### 표시 항목
 
 | 위치 | 폰트 | 내용 | 조건 |
 |------|------|------|------|
-| 상단 | `logisoso24_tf` (24px) | Unique ID (예: `0042`) | 미할당 시 `----` |
-| 하단 | `6x10_tr` (10px) | `[W][S][P]` | 각 연결 시 해당 글자 표시 |
+| 하단(Y=38) | `logisoso24_tf` (24px) | Unique ID (예: `0042`) | 미할당 시 `----` |
+| 상단(Y=26) | `6x10_tr` (10px) | `[W][S][P]` | 각 연결 시 해당 글자 표시 |
 
 `[W]`: `gWifiConnected`, `[S]`: `gRegistered`, `[P]`: `gProductConnected`
+
+참고: `gProductConnected`는 UART 첫 바이트 수신 시 `true`로 설정되어 `[P]`가 활성화된다.
 
 ---
 
