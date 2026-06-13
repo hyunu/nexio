@@ -12,7 +12,6 @@ export const BLE_UUID = {
   CHAR_RX: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
 } as const;
 
-export const HEARTBEAT_INTERVAL_MS = 30000;
 // Heartbeat interval (how often endpoints send HEARTBEAT)
 // and heartbeat timeout (how long to wait before declaring a connection dead).
 // Use 5s interval and 9s timeout to match firmware/clients expectations.
