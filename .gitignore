@@ -24,3 +24,11 @@ apps/pc-config/tsconfig.electron.tsbuildinfo
 
 # TypeScript build info (client)
 apps/client/tsconfig.electron.tsbuildinfo
+
+# Ignore mobile platform build/generated files
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/macos/
+apps/mobile/linux/
+apps/mobile/web/
+apps/mobile/windows/
