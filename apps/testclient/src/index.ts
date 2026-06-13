@@ -13,13 +13,17 @@ if (args.length < 1) {
   console.error('');
   console.error('Examples:');
   console.error('  testclient /tmp/vuart-1-device');
-  console.error('  testclient /tmp/vuart-1-device 115200');
+  console.error('  testclient /tmp/vuart-1-device 19200');
   process.exit(1);
 }
 
 const portPath = args[0];
-const baudRate = parseInt(args[1] || '115200', 10);
+const baudRate = parseInt(args[1] || '19200', 10);
 let hexMode = false;
+
+const UART_HB_IDLE_MS = 2000;
+const UART_HB_INTERVAL_MS = 1000;
+const UART_HB_TIMEOUT_MS = 10000;
 
 const port = new SerialPort({
   path: portPath,
@@ -29,6 +33,10 @@ const port = new SerialPort({
 
 const parser = port.pipe(new ReadlineParser({ delimiter: '\r\n' }));
 
+let lastRxTime = 0;
+let lastHbTime = 0;
+let disconnectedNotified = false;
+
 function formatData(data: string): string {
   if (hexMode) {
     return Buffer.from(data, 'utf-8').toString('hex').replace(/(..)/g, '$1 ').trim().toUpperCase();
@@ -36,14 +44,27 @@ function formatData(data: string): string {
   return data;
 }
 
+function isHeartbeat(data: string): boolean {
+  return data === 'HB';
+}
+
 port.on('open', () => {
   console.log(`[TestClient] Connected to ${portPath} @ ${baudRate} baud`);
   console.log(`[TestClient] Mode: ${hexMode ? 'HEX' : 'TEXT'} (toggle with Ctrl+H)`);
   console.log('[TestClient] Type data and press Enter to send. Ctrl+C to exit.');
   console.log('');
+  lastRxTime = Date.now();
+  disconnectedNotified = false;
 });
 
 parser.on('data', (data: string) => {
+  lastRxTime = Date.now();
+  disconnectedNotified = false;
+
+  if (isHeartbeat(data)) {
+    return;
+  }
+
   const line = formatData(data);
   process.stdout.write(`\x1b[32m[RX]\x1b[0m ${line}\n`);
 });
@@ -63,6 +84,20 @@ port.open((err) => {
     process.exit(1);
   }
 });
+
+setInterval(() => {
+  const now = Date.now();
+
+  if (lastRxTime > 0 && now - lastRxTime > UART_HB_TIMEOUT_MS && !disconnectedNotified) {
+    disconnectedNotified = true;
+    console.log(`\x1b[31m[TestClient] Product disconnected (no data for ${UART_HB_TIMEOUT_MS / 1000}s)\x1b[0m`);
+  }
+
+  if (lastRxTime > 0 && now - lastRxTime > UART_HB_IDLE_MS && now - lastHbTime > UART_HB_INTERVAL_MS) {
+    lastHbTime = now;
+    port.write('HB\r\n');
+  }
+}, 500);
 
 const rl = readline.createInterface({
   input: process.stdin,
