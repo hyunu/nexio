@@ -177,9 +177,7 @@ class BleScanner {
     buffer.write('}');
     return buffer.toString();
   }
-    buffer.write('}');
-    return buffer.toString();
-  }
+ 
 
   String _escapeJson(String value) {
     return value
