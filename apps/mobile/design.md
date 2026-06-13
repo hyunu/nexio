@@ -2,254 +2,232 @@
 
 ## Overview
 
-Flutter mobile application for BLE-based ESP32 onboarding. Scans for Nexio ESP32 devices via BLE and sends WiFi configuration.
+Flutter mobile application for BLE-based ESP32 onboarding. Scans for Nexio devices, connects via BLE, sends WiFi configuration + server URL, then polls the server to confirm registration.
 
 ## Architecture
 
 ```mermaid
 graph TB
     subgraph "Mobile App"
-        BLE[BLE Scanner]
+        BLE[BleScanner]
         UI[Flutter UI]
-        STORAGE[SharedPreferences]
+        STORAGE["StorageService (SharedPreferences)"]
+        SERVER["ServerService (HTTP)"]
     end
 
     subgraph "ESP32 Board"
-        BLE_ESP[BLE GATT Server]
-        NVS[NVS Storage]
-        WIFI[Wi-Fi Manager]
+        BLE_ESP["BLE GATT Server"]
+        NVS["NVS Storage"]
+        WIFI["Wi-Fi Manager"]
+    end
+
+    subgraph "Server"
+        API["HTTP REST API :10008"]
     end
 
     UI --> BLE
     BLE <--> BLE_ESP
-    BLE_ESP --> NVS
-    NVS --> WIFI
+    UI --> STORAGE
+    UI --> SERVER
+    SERVER --> API
 ```
 
-## Screens
+## Screens & Flow
 
 ```mermaid
 graph TD
-    HOME[Home Screen<br/>Scan Devices] --> SELECT[Device Selection]
-    SELECT --> CONFIG[Config Screen<br/>Enter WiFi]
-    CONFIG --> WAITING[Waiting for Board<br/>Server Polling]
-    WAITING -->|Board Registered| SUCCESS[Onboarding Complete]
-    WAITING -->|Timeout| FAIL[Onboarding Failed]
-
-    CONFIG -->|Cancel| HOME
-    SUCCESS -->|Done| HOME
-    FAIL -->|Retry| CONFIG
-    FAIL -->|Done| HOME
+    HOME["Home Screen<br/>BLE scan device list"] -->|Tap device| CONFIG["Config Screen<br/>WiFi form + send"]
+    CONFIG -->|Send| SENDING["Sending...<br/>Claim ID → BLE write"]
+    SENDING -->|Config sent| WAITING["Waiting...<br/>Poll server 30s"]
+    WAITING -->|Registered| DONE["Onboarding Complete"]
+    WAITING -->|Timeout| FAILED["Onboarding Failed<br/>30s timeout"]
+    FAILED -->|Retry| CONFIG
+    CONFIG -->|Discard| HOME
+    DONE -->|Done| HOME
 ```
 
-### Screen 1: Home (Device Scan)
+## StorageService (`storage_service.dart`)
 
-```
-┌────────────────────────────┐
-│ ← Nexio Setup              │
-├────────────────────────────┤
-│                            │
-│ 🔍 Scanning for devices...│
-│                            │
-│ ┌────────────────────────┐ │
-│ │ 🔵 Nexio-ESP32          │
-│ │    AA:BB:CC:DD:EE:FF   │ │
-│ └────────────────────────┘ │
-│                            │
-│ Saved Server:              │
-│ ws://192.168.1.100:10008    │
-│                            │
-│    [Refresh]               │
-└────────────────────────────┘
-```
+SharedPreferences with `Map<SSID, password>` JSON serialization.
 
-### Screen 2: Configuration
+| Key | Value |
+|-----|-------|
+| `server_url` | Server HTTP URL string |
+| `wifi_profiles` | JSON `{"ssid": "password", ...}` |
+| `last_wifi_ssid` | Last used SSID |
 
-```
-┌────────────────────────────┐
-│ ← Configure WiFi          │
-├────────────────────────────┤
-│                            │
-│ Device: Nexio-ESP32        │
-│ MAC: AA:BB:CC:DD:EE:FF     │
-│                            │
-│ ┌────────────────────────┐ │
-│ │ WiFi SSID               │ │
-│ │ [MyWiFi           ]     │ │
-│ └────────────────────────┘ │
-│                            │
-│ ┌────────────────────────┐ │
-│ │ WiFi Password          │ │
-│ │ [********         ]    │ │
-│ └────────────────────────┘ │
-│                            │
-│ ┌────────────────────────┐ │
-│ │ Server URL             │ │
-│ │ [ws://192.168.1.100    │ │
-│ │     :10008/ws/board]   │ │
-│ └────────────────────────┘ │
-│                            │
-│ ┌────────────────────────┐ │
-│ │ 🔗 Sending...         │ │
-│ └────────────────────────┘ │
-└────────────────────────────┘
-```
+Methods: `getServerUrl`, `setServerUrl`, `clearServerUrl`, `getWifiProfiles`, `saveWifiProfile`, `deleteWifiProfile`, `getLastWifiSsid`.
 
-### Screen 3: Onboarding Progress
+### SSID/Password Default
 
-```
-┌────────────────────────────┐
-│ ← Configure WiFi          │
-├────────────────────────────┤
-│                            │
-│ Device: Nexio-ESP32        │
-│ MAC: AA:BB:CC:DD:EE:FF     │
-│                            │
-│ ┌────────────────────────┐ │
-│ │  ◎ Sending...          │ │
-│ │  ✓ Configuration sent! │ │
-│ │  ◌ Waiting for board   │ │
-│ │    to connect server…  │ │
-│ └────────────────────────┘ │
-│          ○ spinner         │
-│                            │
-│    (polling server via     │
-│     GET /api/boards/       │
-│       onboarding?mac=...)   │
-│                            │
-└────────────────────────────┘
-```
+When no saved profiles exist:
+- SSID: `"hyunu_2.4Ghz"`
+- Password: `"gusdn1006"`
 
-### Screen 4: Result
+### `getWifiProfiles()` Defense
 
-```
-┌────────────────────────────┐
-│ ← Configure WiFi          │
-├────────────────────────────┤
-│                            │
-│      ✓ Onboarding Done!    │
-│                            │
-│ Board registered as        │
-│    BOARD-0001              │
-│                            │
-│ ┌────────────────────────┐ │
-│ │     Done              │ │
-│ └────────────────────────┘ │
-└────────────────────────────┘
-```
+If stored JSON fails to decode or is not a `Map`, the key is removed and empty map returned.
 
-```
-┌────────────────────────────┐
-│ ← Configure WiFi          │
-├────────────────────────────┤
-│                            │
-│      ✗ Failed              │
-│                            │
-│ Board did not connect      │
-│ within 30 seconds.         │
-│ Check WiFi credentials.   │
-│                            │
-│ ┌────────────────────────┐ │
-│ │     Retry             │ │
-│ └────────────────────────┘ │
-└────────────────────────────┘
-```
+---
 
-## BLE Service Specification
+## Home Screen (`home_screen.dart`)
 
-```mermaid
-graph TD
-    subgraph "BLE GATT"
-        SERVICE[Service UUID<br/>6e400001-b5a3-...]
-        TX[Characteristic TX<br/>6e400002-...<br/>Notify]
-        RX[Characteristic RX<br/>6e400003-...<br/>Write]
-    end
+### BLE Scan
 
-    MOBILE -->|Write| RX
-    TX -->|Notify| MOBILE
-```
+- Uses `FlutterBluePlus` (v1.x API)
+- Scan filter: device name starts with `"Nexio"` OR manufacturer data contains company ID `0x02D5` OR service UUID contains `6e400001`
+- 10-second scan timeout
+- Results streamed via `BleScanner.scanResults` (broadcast `StreamController`)
 
-**Service UUID:** `6e400001-b5a3-f393-e0a9-e50e24dcca9e`
+### Device State Parsing
 
-**Characteristics:**
-| UUID | Name | Properties |
-|------|------|------------|
-| 6e400002-... | TX | Notify |
-| 6e400003-... | RX | Write |
+From Manufacturer Data byte[2] (flags):
 
-## Configuration Data Format
+| Bit | Flag | State enum |
+|-----|------|-----------|
+| 0 | `PRD` | Product connected |
+| 1 | `SVR` | Registered with server |
+| 2 | `WIFI` | WiFi connected |
+| 3 | `CFG` | Configured (NVS has settings) |
 
-### Write to BLE RX Characteristic
+States derived:
+| Flags | Enum State | Color |
+|-------|-----------|-------|
+| none | `unconfigured` | Blue Grey |
+| CFG only | `configuring` | Amber |
+| CFG+WIFI | `connecting` | Orange |
+| CFG+WIFI+SVR | `connected` | Blue |
+| All 4 | `fullConnected` | Green |
+| CFG+WIFI (no SVR) | `wifiOnly` | Red |
+
+### UI Components
+
+- **Device card**: Icon (colored by state), device name, MAC address, RSSI bars (0-4 bars), state label chip
+- **Server settings**: Settings icon in AppBar → AlertDialog with monospace URL input → saves to StorageService
+- Default server URL: `http://192.168.0.142:10008`
+
+### Navigation
+
+`_onDeviceSelected` → push `ConfigScreen(device, serverUrl)`. On return → rescan.
+
+---
+
+## Config Screen (`config_screen.dart`)
+
+### Stages (`OnboardingStage`)
+
+| Stage | Form fields enabled | Description |
+|-------|-------------------|-------------|
+| `form` | Yes | WiFi SSID/password input, profile selector, send button |
+| `sending` | No | Claiming ID from server + writing config via BLE |
+| `waiting` | No | Waiting for board to register (polling server) |
+| `completed` | No | Success — Done button |
+| `failed` | No | Failure — Close/Retry |
+
+### WiFi Profile Selector
+
+- `Wrap` of chips showing saved SSIDs
+- Active chip: primary color border + bold text
+- Delete button (X) per chip → confirmation dialog → `_deleteProfile()`
+- Tap chip → fill SSID + password fields
+- On successful config send → `_storageService.saveWifiProfile()`
+
+### Send Flow
+
+1. `_sendConfig()` called
+2. **Claim**: `ServerService.claimUniqueId(macAddress)` → POST `/api/onboarding/claim` → get `uniqueId`
+3. **BLE Write**: `_bleScanner.sendConfig(device, { ssid, password, serverUrl, uniqueId })` → write JSON to RX characteristic
+4. **Save profile**: `_storageService.saveWifiProfile(ssid, password)`
+5. **Poll**: `ServerService.waitForOnboarding(macAddress)` → GET `/api/boards/onboarding?mac=` every 3s, timeout 30s
+6. **Result**: `completed` or `failed`
+
+### BLE Log Subscription
+
+- `BleScanner.subscribeToLogs(device)` → subscribe to TX characteristic notify
+- Log level: `error` if message contains FAILED/Error/timeout/retrying/not found/Wrong password
+- Displayed in `_buildBleLogPanel` — timestamped, color-coded (green/red)
+- Only shown during `sending` and `waiting` stages
+- NOT shown during `failed` stage (error messages appear in status card instead)
+
+### Device Controls (bottom sheet in form stage)
+
+| Button | BLE Command | Server Action |
+|--------|------------|--------------|
+| **Reset** | `{"action":"RESET"}` | None (board restarts) |
+| **Discard** | `{"action":"DISCARD"}` | After 300ms delay: POST `/api/boards/discard-by-mac`, disconnect BLE, pop back to home |
+
+Both buttons disabled when not connected or currently sending.
+
+---
+
+## ServerService (`server_service.dart`)
+
+HTTP client (dart:io `HttpClient`, 5s connection timeout).
+
+| Method | Endpoint | Retry |
+|--------|----------|-------|
+| `claimUniqueId(mac)` | POST `/api/onboarding/claim` | No |
+| `checkOnboarding(mac)` | GET `/api/boards/onboarding?mac=` | No |
+| `discardByMac(mac)` | POST `/api/boards/discard-by-mac` | No |
+| `waitForOnboarding(mac, interval=3s, timeout=30s)` | Polls `checkOnboarding` | 3s interval, 30s max |
+
+URL conversion: `ws://host:port/path` → `http://host:port` (removes ws prefix and path suffix).
+
+---
+
+## BleScanner (`ble_scanner.dart`)
+
+### GATT UUIDs
+
+| UUID | Role | BLE Property |
+|------|------|-------------|
+| `6e400001-b5a3-f393-e0a9-e50e24dcca9e` | Service | — |
+| `6e400002-b5a3-f393-e0a9-e50e24dcca9e` | TX (board → phone) | Notify |
+| `6e400003-b5a3-f393-e0a9-e50e24dcca9e` | RX (phone → board) | Write |
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `startScan(timeout)` | `FlutterBluePlus.startScan()`, subscribe to `scanResults` |
+| `stopScan()` | Unsubscribe + `FlutterBluePlus.stopScan()` |
+| `discoverServices(device)` | Cached service discovery (single-flight) |
+| `clearCache()` | Reset service cache |
+| `subscribeToLogs(device)` | Set TX notify → stream of log strings |
+| `sendConfig(device, config)` | Write JSON to RX characteristic |
+| `sendCommand(device, action)` | Write `{"action":"..."}` to RX characteristic |
+| `parseStateFromAdData(data)` | Decode manufacturer data flags → `NexioDeviceState` |
+
+### Config JSON Format
 
 ```json
-{
-  "ssid": "MyWiFiNetwork",
-  "password": "password123",
-  "serverUrl": "ws://192.168.1.100:10008/ws/board"
-}
+{"ssid":"MyWiFi","password":"secret","serverUrl":"http://host:10008","uniqueId":"0042"}
 ```
 
-## Flow Diagram
+- `uniqueId` only included when non-empty
+- Proper JSON escaping for special characters
 
-```mermaid
-sequenceDiagram
-    participant App
-    participant BLE
-    participant ESP
-    participant Server
-
-    App->>BLE: Start Scan (with service UUID)
-    BLE-->>App: Device list
-
-    App->>App: User selects device
-    App->>BLE: Connect to device
-    BLE-->>App: Connected
-
-    App->>App: User enters WiFi config
-    App->>BLE: Write JSON to RX char
-    BLE->>ESP: Save to NVS
-
-    ESP->>ESP: Connect Wi-Fi
-    ESP->>Server: WebSocket REGISTER (MAC address)
-    Server->>Server: Save Board to DB
-
-    loop Poll every 3s (max 30s)
-        App->>Server: GET /api/boards/onboarding?mac=...
-        Server-->>App: { registered: true, board: {...} }
-    end
-
-    App->>App: Show onboarding complete
-```
-
-## Key Features
-
-1. **BLE Scanning**
-   - Scan for devices with Nexio service UUID
-   - Display device name and MAC address
-
-2. **BLE Connection**
-   - Connect to selected ESP32 device
-   - Discover services and characteristics
-
-3. **Configuration Input**
-   - WiFi SSID input
-   - WiFi password input
-   - Server URL input (editable)
-
-4. **Data Transmission**
-   - Write JSON configuration to BLE
-   - Receive success/failure notification
-
-5. **Settings Persistence**
-   - Save server URL locally
-   - Auto-fill on next launch
+---
 
 ## Error Handling
 
 | Error | Action |
 |-------|--------|
-| BLE not available | Show error message |
-| Device not found | Show "No devices found" |
-| Connection failed | Show error, retry option |
-| Write failed | Show error, retry option |
-| Timeout | Show timeout message |
+| BLE not available | Scan fails gracefully |
+| Device connection timeout (10s) | Show "Connection failed" |
+| Server claim fails | Show error, return to form |
+| BLE write fails | Show "Failed to send" |
+| Board registration timeout (30s) | Show failure with message to check WiFi |
+| Invalid stored data | Delete corrupted key, return default |
+| `_bleScanner.sendCommand()` exception | Catch silently (board may restart mid-write) |
+
+## Key Files
+
+| File | Lines | Contents |
+|------|-------|----------|
+| `lib/main.dart` | — | App entry, MaterialApp |
+| `lib/screens/home_screen.dart` | ~463 | BLE scan, device list, state badges |
+| `lib/screens/config_screen.dart` | ~914 | WiFi form, profile selector, BLE config send, polling, controls |
+| `lib/ble/ble_scanner.dart` | ~184 | BLE scan, GATT discover/read/write/subscribe |
+| `lib/services/storage_service.dart` | ~61 | SharedPreferences: server URL, WiFi profiles |
+| `lib/services/server_service.dart` | ~86 | HTTP: claim, polling, discard |
