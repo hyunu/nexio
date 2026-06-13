@@ -70,6 +70,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
   final _formKey = GlobalKey<FormState>();
   final _ssidController = TextEditingController();
   final _passwordController = TextEditingController();
+  int _baudRate = 19200;
 
   final BleScanner _bleScanner = BleScanner();
   final StorageService _storageService = StorageService();
@@ -78,6 +79,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
   bool _isConnected = false;
   String? _statusMessage;
   OnboardingStage _stage = OnboardingStage.form;
+  Map<String, String> _wifiProfiles = {};
   Timer? _pollTimer;
   StreamSubscription<String>? _logSubscription;
   final List<_LogEntry> _bleLogs = [];
@@ -85,8 +87,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
   @override
   void initState() {
     super.initState();
-    _ssidController.text = "hyunu_2.4Ghz";
-    _passwordController.text = "gusdn1006";
+    _loadWifiProfiles();
     _connectToDevice();
     widget.device.connectionState.listen((state) {
       if (mounted) {
@@ -144,6 +145,43 @@ class _ConfigScreenState extends State<ConfigScreen> {
     }
   }
 
+  Future<void> _loadWifiProfiles() async {
+    final profiles = await _storageService.getWifiProfiles();
+    final lastSsid = await _storageService.getLastWifiSsid();
+    if (!mounted) return;
+    setState(() {
+      _wifiProfiles = profiles;
+      if (lastSsid != null && profiles.containsKey(lastSsid)) {
+        _ssidController.text = lastSsid;
+        _passwordController.text = profiles[lastSsid]!;
+      } else {
+        _ssidController.text = "hyunu_2.4Ghz";
+        _passwordController.text = "gusdn1006";
+      }
+    });
+  }
+
+  void _selectProfile(String ssid) {
+    final pw = _wifiProfiles[ssid];
+    if (pw == null) return;
+    setState(() {
+      _ssidController.text = ssid;
+      _passwordController.text = pw;
+    });
+  }
+
+  Future<void> _deleteProfile(String ssid) async {
+    await _storageService.deleteWifiProfile(ssid);
+    if (!mounted) return;
+    setState(() {
+      _wifiProfiles.remove(ssid);
+      if (_ssidController.text == ssid) {
+        _ssidController.text = '';
+        _passwordController.text = '';
+      }
+    });
+  }
+
   Future<void> _sendConfig() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -187,6 +225,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
       'password': _passwordController.text,
       'serverUrl': widget.serverUrl,
       'uniqueId': uniqueId,
+      'baudRate': _baudRate,
     };
 
     await _storageService.setServerUrl(widget.serverUrl);
@@ -206,6 +245,12 @@ class _ConfigScreenState extends State<ConfigScreen> {
       setState(() {
         _stage = OnboardingStage.waiting;
         _statusMessage = 'Configuration sent!\nWaiting for board $uniqueId to connect to server...';
+      });
+
+      await _storageService.saveWifiProfile(_ssidController.text, _passwordController.text);
+      if (!mounted) return;
+      setState(() {
+        _wifiProfiles[_ssidController.text] = _passwordController.text;
       });
 
       final result = await serverService.waitForOnboarding(
@@ -365,7 +410,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final showLogPanel = _stage == OnboardingStage.sending || _stage == OnboardingStage.waiting || _stage == OnboardingStage.failed;
+    final showLogPanel = _stage == OnboardingStage.sending || _stage == OnboardingStage.waiting;
 
     return Scaffold(
       appBar: AppBar(
@@ -487,10 +532,94 @@ class _ConfigScreenState extends State<ConfigScreen> {
     );
   }
 
+  Widget _buildProfileSelector(ColorScheme cs) {
+    final entries = _wifiProfiles.entries.toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Saved Networks',
+          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: entries.map((e) {
+            final active = _ssidController.text == e.key;
+            return Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => _selectProfile(e.key),
+                child: Container(
+                  padding: const EdgeInsets.only(left: 12, right: 4, top: 4, bottom: 4),
+                  decoration: BoxDecoration(
+                    color: active ? cs.primaryContainer : cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                    border: active ? Border.all(color: cs.primary, width: 1.5) : null,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wifi, size: 14, color: active ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+                      const SizedBox(width: 4),
+                      Text(
+                        e.key,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                          color: active ? cs.onPrimaryContainer : cs.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(10),
+                        onTap: () => _confirmDeleteProfile(e.key),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4),
+                          child: Icon(Icons.close, size: 14, color: cs.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  void _confirmDeleteProfile(String ssid) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Profile'),
+        content: Text('Delete "$ssid" profile?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _deleteProfile(ssid);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWiFiForm(ColorScheme cs) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (_wifiProfiles.isNotEmpty) ...[
+          _buildProfileSelector(cs),
+          const SizedBox(height: 12),
+        ],
         Text(
           'WiFi Credentials',
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
@@ -568,6 +697,33 @@ class _ConfigScreenState extends State<ConfigScreen> {
                 ),
               ),
             ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          'Serial Baud Rate',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+              value: _baudRate,
+              isExpanded: true,
+              dropdownColor: cs.surfaceContainerHighest,
+              style: TextStyle(fontSize: 15, color: cs.onSurface),
+              items: [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map((b) {
+                return DropdownMenuItem<int>(value: b, child: Text('$b bps'));
+              }).toList(),
+              onChanged: (v) {
+                if (v != null) setState(() => _baudRate = v);
+              },
+            ),
           ),
         ),
       ],

@@ -114,7 +114,7 @@ class BleScanner {
 
   Future<bool> sendConfig(
     BluetoothDevice device,
-    Map<String, String> config,
+    Map<String, dynamic> config,
   ) async {
     try {
       final services = await discoverServices(device);
@@ -160,16 +160,23 @@ class BleScanner {
     }
   }
 
-  String _createConfigJson(Map<String, String> config) {
+  String _createConfigJson(Map<String, dynamic> config) {
     final buffer = StringBuffer();
     buffer.write('{');
-    buffer.write('"ssid":"${_escapeJson(config['ssid'] ?? '')}",');
-    buffer.write('"password":"${_escapeJson(config['password'] ?? '')}",');
-    buffer.write('"serverUrl":"${_escapeJson(config['serverUrl'] ?? '')}"');
-    final uniqueId = config['uniqueId'];
+    buffer.write('"ssid":"${_escapeJson(config['ssid']?.toString() ?? '')}",');
+    buffer.write('"password":"${_escapeJson(config['password']?.toString() ?? '')}",');
+    buffer.write('"serverUrl":"${_escapeJson(config['serverUrl']?.toString() ?? '')}"');
+    final uniqueId = config['uniqueId']?.toString();
     if (uniqueId != null && uniqueId.isNotEmpty) {
       buffer.write(',"uniqueId":"${_escapeJson(uniqueId)}"');
     }
+    final baudRate = config['baudRate'];
+    if (baudRate != null) {
+      buffer.write(',"baudRate":${baudRate}');
+    }
+    buffer.write('}');
+    return buffer.toString();
+  }
     buffer.write('}');
     return buffer.toString();
   }

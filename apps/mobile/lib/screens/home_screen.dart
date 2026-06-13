@@ -123,7 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (context) => ConfigScreen(
           device: device.device,
-          serverUrl: _savedServerUrl ?? 'http://192.168.0.9:10008',
+          serverUrl: _savedServerUrl ?? 'http://192.168.0.142:10008',
         ),
       ),
     );
@@ -131,7 +131,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showServerSettings() async {
-    final controller = TextEditingController(text: _savedServerUrl ?? 'http://192.168.0.9:10008');
+    final controller = TextEditingController(text: _savedServerUrl ?? 'http://192.168.0.142:10008');
     final cs = Theme.of(context).colorScheme;
     final result = await showDialog<String>(
       context: context,
