@@ -20,7 +20,7 @@
   ─── LEGEND ──────────────────────────────────────────────────
   Binary : raw bytes           B64 : Base64 encoded
   WS     : WebSocket JSON      BLE : Bluetooth Low Energy
-  REST   : HTTP API (JSON)     UART : Serial (TX=7, RX=6, 115200)
+  REST   : HTTP API (JSON)     UART : Serial (TX=7, RX=6, 19200 기본, 온보딩 시 변경 가능)
 ```
 
 ### Data Direction
@@ -445,7 +445,7 @@ Electron 데스크톱 앱. 모바일 BLE 온보딩의 대체 수단으로, USB �
 src/renderer/App.tsx
 │
 ├── Serial Port Connection
-│   ├── Port 선택 + Baud Rate (115200)
+│   ├── Port 선택 + Baud Rate (19200 기본)
 │   └── Open/Close/Refresh
 │
 ├── Configuration Form

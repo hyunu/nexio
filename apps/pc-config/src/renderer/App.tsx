@@ -33,13 +33,14 @@ const STORAGE_KEY_SERVER_URL = 'nexio_server_url';
 function App() {
   const [ports, setPorts] = useState<{ path: string; manufacturer: string }[]>([]);
   const [selectedPort, setSelectedPort] = useState('');
-  const [baudRate, setBaudRate] = useState(115200);
+  const [baudRate, setBaudRate] = useState(19200);
   const [serialConnected, setSerialConnected] = useState(false);
 
   const [ssid, setSsid] = useState('');
   const [password, setPassword] = useState('');
   const [serverUrl, setServerUrl] = useState('ws://192.168.1.100:10008/ws/board');
   const [macAddress, setMacAddress] = useState('');
+  const [productBaudRate, setProductBaudRate] = useState(19200);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [onboardingStage, setOnboardingStage] = useState<OnboardingStage>('form');
@@ -107,7 +108,7 @@ function App() {
     addLog('info', `Claimed board ID: ${uniqueId}`);
 
     setOnboardingStage('sending');
-    const config = JSON.stringify({ ssid, password, serverUrl, uniqueId });
+    const config = JSON.stringify({ ssid, password, serverUrl, uniqueId, baudRate: productBaudRate });
     const writeResult = await window.electronAPI.serial.write(config);
 
     if (!writeResult.success) {
@@ -256,6 +257,18 @@ function App() {
             disabled={isWorking}
             style={styles.input}
           />
+
+          <label style={styles.label}>Product UART Baud Rate</label>
+          <select
+            value={productBaudRate}
+            onChange={e => setProductBaudRate(Number(e.target.value))}
+            disabled={isWorking}
+            style={styles.select}
+          >
+            {[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map(b => (
+              <option key={b} value={b}>{b} bps</option>
+            ))}
+          </select>
 
           {onboardingStage === 'form' && (
             <button

@@ -11,3 +11,10 @@
 **/android/local.properties
 **/*.iml
 *.log
+
+# PlatformIO
+.pio/
+
+# VS Code
+.vscode/
+**/.vscode/
