@@ -1140,7 +1140,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       // Mark orphaned IDLE boards as DISCONNECTED so they don't linger
       if (idleBoards.length > 0) {
         await prisma.board.updateMany({
-          where: { id: { in: idleBoards.map(b => b.id) } },
+        where: { id: { in: idleBoards.map((b: any) => b.id) } },
           data: { status: 'OFFLINE' },
         });
       }
