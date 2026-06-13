@@ -18,6 +18,29 @@ const PORT = parseInt(process.env.PORT || '10008');
 const boardConnections = new Map<string, WebSocket>();
 const clientConnections = new Map<string, WebSocket>();
 const heartbeatTimers = new Map<string, NodeJS.Timeout>();
+
+async function notifyClientsBoardDiscarded(boardId: string) {
+  const sessions = await prisma.session.findMany({
+    where: { board: { uniqueId: boardId }, status: 'ACTIVE' },
+    include: { client: true },
+  });
+  for (const session of sessions) {
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { status: 'TERMINATED' },
+    });
+    const clientWs = clientConnections.get(session.client.clientId);
+    if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: 'END_SESSION',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        sessionId: session.id,
+        reason: 'board_discarded',
+      }));
+    }
+  }
+}
 const boardCommandQueues = new Map<string, any[]>();
 const monitorConnections = new Map<string, WebSocket>();
 const boardLogs = new Map<string, any[]>();
@@ -241,6 +264,7 @@ async function start() {
         sessionId: session.id,
         assignedAt: now.getTime(),
         expiresAt: expiresAt.getTime(),
+        productConnected: board.productConnected,
       }));
     }
 
@@ -299,6 +323,7 @@ async function start() {
 
     const ackReceived = await waitForDiscardAck(id, 5000);
 
+    await notifyClientsBoardDiscarded(id);
     await prisma.board.update({ where: { uniqueId: id }, data: { status: 'DISCARDED' } }).catch(() => {});
     boardCommandQueues.delete(id);
     boardConnections.delete(id);
@@ -317,6 +342,7 @@ async function start() {
       return reply.status(404).send({ error: 'Board not found' });
     }
     const id = board.uniqueId;
+    await notifyClientsBoardDiscarded(id);
     await prisma.board.update({ where: { id: board.id }, data: { status: 'DISCARDED' } }).catch(() => {});
     boardCommandQueues.delete(id);
     boardConnections.delete(id);
@@ -701,6 +727,26 @@ async function start() {
             where: { uniqueId: boardId },
             data: { status: 'OFFLINE' },
           });
+          const sessions = await prisma.session.findMany({
+            where: { board: { uniqueId: boardId }, status: 'ACTIVE' },
+            include: { client: true },
+          });
+          for (const session of sessions) {
+            await prisma.session.update({
+              where: { id: session.id },
+              data: { status: 'TERMINATED' },
+            });
+            const clientWs = clientConnections.get(session.client.clientId);
+            if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'END_SESSION',
+                version: MESSAGE_VERSION,
+                timestamp: Date.now(),
+                sessionId: session.id,
+                reason: 'board_disconnected',
+              }));
+            }
+          }
         }
       }
     });
@@ -722,6 +768,30 @@ async function start() {
       if (clientId) {
         clientConnections.delete(clientId!);
         clearHeartbeatTimer(clientId!);
+        const client = await prisma.client.findUnique({ where: { clientId } });
+        if (client) {
+          const sessions = await prisma.session.findMany({
+            where: { clientId: client.id, status: 'ACTIVE' },
+            include: { board: true },
+          });
+          for (const s of sessions) {
+            await prisma.session.update({
+              where: { id: s.id },
+              data: { status: 'TERMINATED' },
+            });
+            sendToBoard(s.board.uniqueId, {
+              type: 'CONTROL',
+              version: MESSAGE_VERSION,
+              timestamp: Date.now(),
+              action: 'DISCONNECT',
+              reason: 'client_disconnected',
+            });
+            await prisma.board.update({
+              where: { id: s.board.id },
+              data: { status: 'IDLE' },
+            });
+          }
+        }
         await prisma.client.updateMany({
           where: { clientId: clientId },
           data: { status: 'DISCONNECTED' },
@@ -843,36 +913,101 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
   }
 
   if (type === 'HEARTBEAT') {
-    resetHeartbeatTimer(id || msg.uniqueId);
+    const boardUniqueId = id || msg.uniqueId;
+    if (boardUniqueId) {
+      resetHeartbeatTimer(boardUniqueId);
+      // Propagate productConnected changes
+      if (typeof msg.productConnected === 'boolean') {
+        const board = await prisma.board.findUnique({ where: { uniqueId: boardUniqueId } });
+        if (board && board.productConnected !== msg.productConnected) {
+          await prisma.board.update({
+            where: { id: board.id },
+            data: { productConnected: msg.productConnected },
+          });
+          // Notify all active session clients
+          const sessions = await prisma.session.findMany({
+            where: { boardId: board.id, status: 'ACTIVE' },
+            include: { client: true },
+          });
+          for (const s of sessions) {
+            const clientWs = clientConnections.get(s.client.clientId);
+            if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'PRODUCT_STATUS',
+                version: MESSAGE_VERSION,
+                timestamp: Date.now(),
+                sessionId: s.id,
+                boardId: boardUniqueId,
+                connected: msg.productConnected,
+              }));
+            }
+          }
+        }
+      }
+    }
     ws.send(JSON.stringify({
       type: 'HEARTBEAT',
       version: MESSAGE_VERSION,
       timestamp: Date.now(),
-      id: id || msg.uniqueId,
+      id: boardUniqueId,
     }));
   }
 
-  if (type === 'DATA_RELAY' && sessionId) {
+  if (type === 'DATA_RELAY') {
     const boardUniqueId = id || boardId;
     if (boardUniqueId) resetHeartbeatTimer(boardUniqueId);
-    const session = await prisma.session.findUnique({ where: { id: sessionId } });
-    if (session) {
-      const client = await prisma.client.findUnique({ where: { id: session.clientId } });
-      if (client) {
-        const clientWs = clientConnections.get(client.clientId);
+
+    // Normalize board→client: hex or base64 payload → base64, direction → B_TO_C
+    const isBoardToServer = direction === 'uart_to_server' || direction === 'B_TO_C';
+    const clientPayload = (isBoardToServer && payload && /^[0-9A-Fa-f]+$/.test(payload))
+      ? Buffer.from(payload, 'hex').toString('base64')
+      : payload;
+    const clientDirection = isBoardToServer ? 'B_TO_C' : direction;
+
+    if (sessionId) {
+      const session = await prisma.session.findUnique({ where: { id: sessionId } });
+      if (session) {
+        const client = await prisma.client.findUnique({ where: { id: session.clientId } });
+        if (client) {
+          const clientWs = clientConnections.get(client.clientId);
+          if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'DATA_RELAY',
+              version: MESSAGE_VERSION,
+              timestamp: Date.now(),
+              sessionId,
+              sourceId: msg.uniqueId || boardId,
+              direction: clientDirection,
+              payload: clientPayload,
+              hexDisplay: isBoardToServer ? payload : undefined,
+            }));
+          }
+        }
+      }
+    } else if (boardUniqueId) {
+      const sessions = await prisma.session.findMany({
+        where: { board: { uniqueId: boardUniqueId }, status: 'ACTIVE' },
+        include: { client: true },
+      });
+      for (const s of sessions) {
+        const clientWs = clientConnections.get(s.client.clientId);
         if (clientWs && clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify({
             type: 'DATA_RELAY',
             version: MESSAGE_VERSION,
             timestamp: Date.now(),
-            sessionId,
-            sourceId: msg.uniqueId || boardId,
-            direction,
-            payload,
+            sessionId: s.id,
+            sourceId: boardUniqueId,
+            direction: clientDirection,
+            payload: clientPayload,
+            hexDisplay: isBoardToServer ? payload : undefined,
           }));
-          broadcastToMonitors({ boardId: boardUniqueId, type: 'DATA_RELAY', sessionId, sourceId: msg.uniqueId || boardId, direction, payload });
         }
       }
+    }
+
+    if (boardUniqueId) {
+      broadcastToMonitors({ boardId: boardUniqueId, type: 'DATA_RELAY', timestamp: Date.now(), sessionId, sourceId: msg.uniqueId || boardId, direction, payload, hexDisplay: isBoardToServer ? payload : undefined });
     }
   }
 
@@ -945,6 +1080,25 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
     setClientId(newClientId);
     clientConnections.set(newClientId, ws);
 
+    // Terminate any existing active sessions for this client
+    const existingSessions = await prisma.session.findMany({
+      where: { clientId: client.id, status: 'ACTIVE' },
+      include: { board: true },
+    });
+    for (const s of existingSessions) {
+      await prisma.session.update({
+        where: { id: s.id },
+        data: { status: 'TERMINATED' },
+      });
+      sendToBoard(s.board.uniqueId, {
+        type: 'CONTROL',
+        version: MESSAGE_VERSION,
+        timestamp: Date.now(),
+        action: 'DISCONNECT',
+        reason: 'client_reconnect',
+      });
+    }
+
     // Send user info back to client
     ws.send(JSON.stringify({
       type: 'AUTH_INFO',
@@ -954,9 +1108,42 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       clientId: newClientId,
     }));
 
-    const idleBoards = await prisma.board.findMany({ where: { status: 'IDLE' } });
+    // Free orphaned BUSY boards whose client WS is gone
+    const busyBoards = await prisma.board.findMany({
+      where: { status: 'BUSY' },
+      include: { sessions: { where: { status: 'ACTIVE' }, include: { client: true } } },
+    });
+    for (const bb of busyBoards) {
+      if (bb.sessions.length === 0) {
+        await prisma.board.update({ where: { id: bb.id }, data: { status: 'IDLE' } });
+      }
+      for (const ss of bb.sessions) {
+        const cws = clientConnections.get(ss.client.clientId);
+        if (!cws || cws.readyState !== WebSocket.OPEN) {
+          await prisma.session.update({ where: { id: ss.id }, data: { status: 'TERMINATED' } });
+          sendToBoard(bb.uniqueId, {
+            type: 'CONTROL', version: MESSAGE_VERSION, timestamp: Date.now(),
+            action: 'DISCONNECT', reason: 'client_disconnected',
+          });
+          await prisma.board.update({ where: { id: bb.id }, data: { status: 'IDLE' } });
+        }
+      }
+    }
 
-    if (idleBoards.length === 0) {
+    const idleBoards = await prisma.board.findMany({ where: { status: 'IDLE' } });
+    const activeBoards = idleBoards.filter(b => {
+      const w = boardConnections.get(b.uniqueId);
+      return w && w.readyState === WebSocket.OPEN;
+    });
+
+    if (activeBoards.length === 0) {
+      // Mark orphaned IDLE boards as DISCONNECTED so they don't linger
+      if (idleBoards.length > 0) {
+        await prisma.board.updateMany({
+          where: { id: { in: idleBoards.map(b => b.id) } },
+          data: { status: 'OFFLINE' },
+        });
+      }
       ws.send(JSON.stringify({
         type: 'ERROR',
         version: MESSAGE_VERSION,
@@ -967,7 +1154,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       return;
     }
 
-    const board = idleBoards[0];
+    const board = activeBoards[0];
     const duration = sessionDuration || 3600;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + duration * 1000);
@@ -1005,6 +1192,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
       sessionId: session.id,
       assignedAt: now.getTime(),
       expiresAt: expiresAt.getTime(),
+      productConnected: board.productConnected,
     }));
 
     startHeartbeatTimer(newClientId);
@@ -1053,7 +1241,26 @@ function startHeartbeatTimer(id: string) {
     const ws = boardConnections.get(id);
     if (ws) ws.close();
     boardConnections.delete(id);
-    // If board was HTTP-based, it's fine — it'll reconnect on next heartbeat
+    const sessions = await prisma.session.findMany({
+      where: { board: { uniqueId: id }, status: 'ACTIVE' },
+      include: { client: true },
+    });
+    for (const session of sessions) {
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { status: 'TERMINATED' },
+      });
+      const clientWs = clientConnections.get(session.client.clientId);
+      if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({
+          type: 'END_SESSION',
+          version: MESSAGE_VERSION,
+          timestamp: Date.now(),
+          sessionId: session.id,
+          reason: 'board_timeout',
+        }));
+      }
+    }
   }, HEARTBEAT_TIMEOUT_MS);
   heartbeatTimers.set(id, timer);
 }
@@ -1103,11 +1310,11 @@ async function checkExpiredSessions() {
     const clientWs = clientConnections.get(session.client.clientId);
     if (clientWs && clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({
-        type: 'ERROR',
+        type: 'END_SESSION',
         version: MESSAGE_VERSION,
         timestamp: Date.now(),
-        code: 'SESSION_EXPIRED',
-        message: 'Your session has expired',
+        sessionId: session.id,
+        reason: 'session_expired',
       }));
     }
   }
