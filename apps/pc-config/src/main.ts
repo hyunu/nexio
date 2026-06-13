@@ -93,7 +93,7 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
 
     serialPort = new SerialPort({
       path: portPath,
-      baudRate: baudRate || 115200,
+      baudRate: baudRate || 19200,
     });
 
     parser = serialPort.pipe(new ReadlineParser({ delimiter: '\n' }));
