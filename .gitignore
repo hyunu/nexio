@@ -21,3 +21,6 @@
 
 # TypeScript build info
 apps/pc-config/tsconfig.electron.tsbuildinfo
+
+# TypeScript build info (client)
+apps/client/tsconfig.electron.tsbuildinfo
