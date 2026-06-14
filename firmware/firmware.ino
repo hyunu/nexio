@@ -97,6 +97,7 @@ static void sendLog(const char* level, const char* message);
 static void updateStatusFlags();
 static void wifiConnect(const char* ssid, const char* pass);
 static void wsToUart(const char* payload, size_t len);
+static void setUniqueId(const char* uid);
 #ifdef USE_OLED
 static void updateDisplay();
 #endif
@@ -158,6 +159,28 @@ class RxCb : public NimBLECharacteristicCallbacks {
             prefs.begin("nexio", false);
             prefs.clear();
             prefs.end();
+            // 런타임 상태 전부 초기화
+            setUniqueId("");
+            gOnboarded = false;
+            gRegistered = false;
+            gWifiConnected = false;
+            gWifiAttempted = false;
+            gWifiRetryCount = 0;
+            gWifiRetryDone = false;
+            gServerHost[0] = '\0';
+            gServerPort = 0;
+            gProductConnected = false;
+            gProductBaudRate = PRODUCT_UART_BAUD;
+            // WiFi 연결 제거
+            WiFi.disconnect(true, true);
+            // BLE 광고 즉시 갱신: 정지 후 재시작
+            {
+              NimBLEAdvertising* _adv = NimBLEDevice::getAdvertising();
+              _adv->stop();
+              updateStatusFlags();
+              startBLEAdvertising();
+            }
+            // 완전 초기화를 위해 재부팅
             gPendingRestart = true;
           }
         }
@@ -216,7 +239,7 @@ class RxCb : public NimBLECharacteristicCallbacks {
       bleNotify(buf);
 
       if (uid[0])
-        strncpy(gUniqueId, uid, sizeof(gUniqueId) - 1);
+        setUniqueId(uid);
 
       // NVS에 저장 ──────────────────────────────────────────────────
       prefs.begin("nexio", false);
@@ -286,6 +309,29 @@ static void bleNotify(const char* msg) {
 }
 
 //-----------------------------------------------------------------------------
+// setUniqueId: 안전하게 gUniqueId 설정 (숫자일 경우 4자리 0패딩)
+//-----------------------------------------------------------------------------
+static void setUniqueId(const char* uid) {
+  if (!uid || uid[0] == '\0') {
+    gUniqueId[0] = '\0';
+    return;
+  }
+  // 숫자 문자열이면 정수로 파싱해 4자리 0패딩
+  bool isDigit = true;
+  for (const char* p = uid; *p; ++p) {
+    if (*p < '0' || *p > '9') { isDigit = false; break; }
+  }
+  if (isDigit) {
+    int v = atoi(uid);
+    snprintf(gUniqueId, sizeof(gUniqueId), "%04d", v);
+  } else {
+    // 비숫자면 그대로 복사(널종료 보장)
+    strncpy(gUniqueId, uid, sizeof(gUniqueId) - 1);
+    gUniqueId[sizeof(gUniqueId) - 1] = '\0';
+  }
+}
+
+//-----------------------------------------------------------------------------
 // sendLog: 로그 전송 (연결된 모든 채널로)
 // BLE 연결 → BLE notify + Serial, WS 연결 → WS LOG, 둘 다 → 둘 다
 //-----------------------------------------------------------------------------
@@ -315,22 +361,49 @@ static void startBLEAdvertising() {
   // 연결 중(phone connected)에는 stop()이 실패하지만 무방함 — 연결 해제 후 재호출됨.
   adv->stop();
 
-  // Manufacturer data: 회사 ID(0x02D5) + 상태 플래그
-  uint8_t mfg[5] = {
-    (uint8_t)(0x02D5 & 0xFF),
-    (uint8_t)(0x02D5 >> 8),
-    gStatusFlags, 0x00, 0x00
-  };
-  adv->setManufacturerData(mfg, 5);
+  // Manufacturer data: 회사 ID(0x02D5) + 상태 플래그 + (선택) Unique ID (ASCII)
+  {
+    const uint16_t company = 0x02D5;
+    const size_t uidLen = gUniqueId[0] ? strlen(gUniqueId) : 0;
+    const size_t mfgLen = 3 + uidLen; // company_lo, company_hi, flags, [uid...]
+    std::vector<uint8_t> mfg(mfgLen);
+    mfg[0] = (uint8_t)(company & 0xFF);
+    mfg[1] = (uint8_t)(company >> 8);
+    mfg[2] = gStatusFlags;
+    for (size_t i = 0; i < uidLen; ++i) {
+      mfg[3 + i] = (uint8_t)gUniqueId[i];
+    }
+    adv->setManufacturerData(mfg.data(), (int)mfgLen);
+    // Debug: print advertising payload to serial for verification
+    {
+      char dbgName[48];
+      if (gUniqueId[0]) snprintf(dbgName, sizeof(dbgName), "Nexio-%s", gUniqueId);
+      else { strncpy(dbgName, "Nexio", sizeof(dbgName) - 1); dbgName[sizeof(dbgName)-1] = '\0'; }
+      Serial.print("[BLE DBG] Advertising name=");
+      Serial.print(dbgName);
+      Serial.print(" flags=0x");
+      Serial.print(gStatusFlags, HEX);
+      Serial.print(" mfgBytes=");
+      for (size_t _i = 0; _i < mfgLen; ++_i) {
+        if (mfg[_i] < 16) Serial.print('0');
+        Serial.print(mfg[_i], HEX);
+        Serial.print(' ');
+      }
+      Serial.println();
+    }
+  }
 
-  if (!gBleAdvertising) {
+  // 항상 현재 gUniqueId를 반영해 광고 이름을 갱신
+  {
     char name[48];
-    if (gUniqueId[0])
+    if (gUniqueId[0]) {
       snprintf(name, sizeof(name), "Nexio-%s", gUniqueId);
-    else
+    } else {
       strncpy(name, "Nexio", sizeof(name) - 1);
+      name[sizeof(name) - 1] = '\0';
+    }
     NimBLEDevice::setDeviceName(name);
-    gBleAdvertising = true;
+    if (!gBleAdvertising) gBleAdvertising = true;
   }
 
   // start()로 변경된 manufacturer data를 BLE 컨트롤러에 반영
@@ -471,10 +544,10 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
       if (strcmp(type, "ASSIGN_ID") == 0) {
         const char* nid = doc["uniqueId"];
         if (nid && strlen(nid) > 0) {
-          strncpy(gUniqueId, nid, sizeof(gUniqueId) - 1);
-          prefs.begin("nexio", false);
-          prefs.putString("uid", gUniqueId);
-          prefs.end();
+        setUniqueId(nid);
+        prefs.begin("nexio", false);
+        prefs.putString("uid", gUniqueId);
+        prefs.end();
         }
         if (!gRegistered) {
           gRegistered = true;
@@ -507,6 +580,26 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
           prefs.begin("nexio", false);
           prefs.clear();
           prefs.end();
+          // 런타임 상태 전부 초기화
+          setUniqueId("");
+          gOnboarded = false;
+          gRegistered = false;
+          gWifiConnected = false;
+          gWifiAttempted = false;
+          gWifiRetryCount = 0;
+          gWifiRetryDone = false;
+          gServerHost[0] = '\0';
+          gServerPort = 0;
+          gProductConnected = false;
+          gProductBaudRate = PRODUCT_UART_BAUD;
+          WiFi.disconnect(true, true);
+          // BLE 광고 즉시 갱신
+          {
+            NimBLEAdvertising* _adv = NimBLEDevice::getAdvertising();
+            _adv->stop();
+            updateStatusFlags();
+            startBLEAdvertising();
+          }
           gPendingRestart = true;
         }
 
@@ -758,7 +851,7 @@ void setup() {
   }
 
   if (ssid.length() > 0) {
-    strncpy(gUniqueId, uid.c_str(), sizeof(gUniqueId) - 1);
+    setUniqueId(uid.c_str());
     gOnboarded = true;
 
     int ps = url.indexOf("://");

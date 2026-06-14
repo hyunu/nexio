@@ -25,6 +25,7 @@ class BleScanner {
   final StreamController<List<ScanResult>> _scanController =
       StreamController<List<ScanResult>>.broadcast();
   StreamSubscription<List<ScanResult>>? _fbpSubscription;
+  bool _isScanning = false;
 
   List<BluetoothService>? _cachedServices;
   Future<List<BluetoothService>>? _discoveryInProgress;
@@ -71,21 +72,24 @@ class BleScanner {
   }
 
   Future<void> startScan({Duration? timeout}) async {
+    if (_isScanning) return;
+    // start scanning with FlutterBluePlus and pipe results to our controller
     _fbpSubscription?.cancel();
-
     await FlutterBluePlus.startScan(
       timeout: timeout,
     );
-
     _fbpSubscription = FlutterBluePlus.scanResults.listen((results) {
       _scanController.add(results);
     });
+    _isScanning = true;
   }
 
   Future<void> stopScan() async {
+    if (!_isScanning) return;
     _fbpSubscription?.cancel();
     _fbpSubscription = null;
     await FlutterBluePlus.stopScan();
+    _isScanning = false;
   }
 
   Future<bool> sendCommand(BluetoothDevice device, String action) async {

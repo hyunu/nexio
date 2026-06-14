@@ -20,7 +20,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isScanning = false;
   String? _savedServerUrl;
   StreamSubscription? _scanSubscription;
-  Timer? _scanRefreshTimer;
 
   @override
   void initState() {
@@ -31,7 +30,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _scanRefreshTimer?.cancel();
     _scanSubscription?.cancel();
     _bleScanner.stopScan();
     super.dispose();
@@ -53,26 +51,51 @@ class _HomeScreenState extends State<HomeScreen> {
 
     await _waitForBluetooth();
 
-    _scanRefreshTimer?.cancel();
     _scanSubscription?.cancel();
     try {
-      await FlutterBluePlus.stopScan();
+      await _bleScanner.stopScan();
     } catch (_) {}
 
     _scanSubscription = _bleScanner.scanResults.listen((results) {
       if (!mounted) return;
+
+      // 디버그: 제조사 데이터(키 0x02D5)가 포함된 항목의 원시 바이트를 출력
+      for (var r in results) {
+        final mfg = r.advertisementData.manufacturerData;
+        if (mfg.containsKey(0x02D5)) {
+          final bytes = mfg[0x02D5];
+          debugPrint('Nexio adv mfg bytes for ${r.device.remoteId.str}: ${bytes}');
+        }
+      }
+
+      // 필터된 결과를 remoteId 기준으로 병합하여 기존에 표시된 항목이 업데이트되도록 보장
+      final Map<String, ScanResult> updatedById = {};
+      for (var r in results) {
+        final advName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
+        final mfg = r.advertisementData.manufacturerData;
+        final uuids = r.advertisementData.serviceUuids;
+        final bool isNexio = advName.startsWith('Nexio') ||
+            mfg.containsKey(0x02D5) ||
+            uuids.any((u) => u.str.toLowerCase().contains('6e400001'));
+        if (!isNexio) continue;
+        updatedById[r.device.remoteId.str] = r;
+      }
+
+      // 보이던 순서를 유지하되 업데이트된 데이터를 덮어쓰고, 신규 항목은 뒤에 추가
+      final List<ScanResult> merged = [];
+      final existingIds = _devices.map((d) => d.device.remoteId.str).toList();
+      for (var id in existingIds) {
+        if (updatedById.containsKey(id)) {
+          merged.add(updatedById.remove(id)!);
+        }
+      }
+      // 남은 신규 항목 추가 (RSSI 내림차순)
+      final remaining = updatedById.values.toList()
+        ..sort((a, b) => b.rssi.compareTo(a.rssi));
+      merged.addAll(remaining);
+
       setState(() {
-        _devices = results
-            .where((r) {
-              final advName = r.device.platformName.isNotEmpty ? r.device.platformName : r.advertisementData.advName;
-      if (advName.startsWith('Nexio')) return true;
-              final mfg = r.advertisementData.manufacturerData;
-              if (mfg.containsKey(0x02D5)) return true;
-              final uuids = r.advertisementData.serviceUuids;
-              if (uuids.any((u) => u.str.toLowerCase().contains('6e400001'))) return true;
-              return false;
-            })
-            .toList();
+        _devices = merged;
       });
     });
 
@@ -87,14 +110,8 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    _scanRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _refreshScan());
-  }
-
-  Future<void> _refreshScan() async {
-    try {
-      await FlutterBluePlus.stopScan();
-      await _bleScanner.startScan();
-    } catch (_) {}
+    // Previously we restarted scanning periodically which caused brief interruptions
+    // on some iOS devices. Keep the scan running continuously instead.
   }
 
   Future<void> _waitForBluetooth() async {
@@ -141,6 +158,45 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (mounted) _startScan();
+  }
+
+  String _displayName(ScanResult device) {
+    final advName = device.device.platformName.isNotEmpty
+        ? device.device.platformName
+        : device.advertisementData.advName;
+    if (advName.isNotEmpty && advName.contains('-')) return advName;
+
+    final mfg = device.advertisementData.manufacturerData;
+    final bytes = mfg[0x02D5];
+    if (bytes != null && bytes.isNotEmpty) {
+      // 두 가지 포맷을 허용:
+      // A) [flags, uid...] (플러그인에서 company id를 제외한 경우)
+      // B) [company_lo, company_hi, flags, uid...] (펌웨어가 company id까지 포함한 경우)
+      List<int> uidBytes = [];
+      if (bytes.length >= 4 && bytes[0] == 0xD5 && bytes[1] == 0x02) {
+        // company id present (company 0x02D5 encoded as lo=0xD5, hi=0x02)
+        if (bytes.length > 3) uidBytes = bytes.sublist(3);
+      } else {
+        // assume first byte is flags
+        if (bytes.length > 1) uidBytes = bytes.sublist(1);
+      }
+
+      // try ASCII UID first (strip NULs)
+      try {
+        String uidStr = String.fromCharCodes(uidBytes).replaceAll('\x00', '').trim();
+        if (uidStr.isNotEmpty && RegExp(r'^[\dA-Za-z\-]+$').hasMatch(uidStr)) {
+          return 'Nexio-$uidStr';
+        }
+      } catch (_) {}
+
+      // fallback: hex representation
+      if (uidBytes.isNotEmpty) {
+        final hex = uidBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        if (hex.isNotEmpty) return 'Nexio-$hex';
+      }
+    }
+
+    return advName.isNotEmpty ? advName : 'Nexio';
   }
 
   Widget _buildRssiIndicator(int rssi) {
@@ -191,6 +247,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final cs = Theme.of(context).colorScheme;
 
     return Card(
+      key: ValueKey(device.device.remoteId.str),
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       elevation: 0,
       shape: RoundedRectangleBorder(
@@ -220,7 +277,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      device.device.platformName.isNotEmpty ? device.device.platformName : device.advertisementData.advName,
+                      _displayName(device),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w600,
