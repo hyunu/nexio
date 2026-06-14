@@ -88,6 +88,7 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
     serialPort = new SerialPort({
       path: portPath,
       baudRate: baudRate || 19200,
+      autoOpen: false,
     });
 
     parser = serialPort.pipe(new ReadlineParser({ delimiter: '\r\n' }));
@@ -110,6 +111,13 @@ ipcMain.handle('serial:open', async (_, { path: portPath, baudRate }) => {
       if (mainWindow) {
         mainWindow.webContents.send('serial:disconnected');
       }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      serialPort!.open((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
     });
 
     return { success: true };

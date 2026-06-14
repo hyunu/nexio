@@ -3,17 +3,17 @@ import { ReadlineParser } from '@serialport/parser-readline';
 import * as readline from 'readline';
 
 const args = process.argv.slice(2);
+const testSend = args.includes('--test-send');
+const testSendIdx = args.indexOf('--test-send');
+const testDuration = testSend ? parseInt(args[testSendIdx + 1] || '60', 10) : 0;
 
-if (args.length < 1) {
-  console.error('Usage: testclient <port-path> [baud-rate]');
+if (args.length < 1 && !testSend) {
+  console.error('Usage:');
+  console.error('  testclient <port-path> [baud-rate]');
+  console.error('  testclient <port-path> [baud-rate] --test-send [minutes]');
   console.error('');
-  console.error('Connects to a serial device and relays data bidirectionally.');
-  console.error('Type input and press Enter to send data to the device.');
-  console.error('Data received from the device is printed to stdout.');
-  console.error('');
-  console.error('Examples:');
-  console.error('  testclient /tmp/vuart-1-device');
-  console.error('  testclient /tmp/vuart-1-device 19200');
+  console.error('Sends sequenced test packets every 100ms to verify no loss/corruption.');
+  console.error('Connect test-verify to ws://host:10008/ws/monitor to check results.');
   process.exit(1);
 }
 
@@ -46,6 +46,14 @@ function isHeartbeat(data: string): boolean {
 }
 
 port.on('open', () => {
+  if (testSend) {
+    const totalPackets = testDuration * 60 * 10;
+    console.log(`[TestSend] Starting: ${testDuration}min, ${totalPackets} packets @ 100ms`);
+    console.log(`[TestSend] Format: S:<seq>:<checksum>`);
+    startTestSend(totalPackets);
+    return;
+  }
+
   console.log(`[TestClient] Connected to ${portPath} @ ${baudRate} baud`);
   console.log(`[TestClient] Mode: ${hexMode ? 'HEX' : 'TEXT'} (toggle with Ctrl+H)`);
   console.log('[TestClient] Type data and press Enter to send. Ctrl+C to exit.');
@@ -53,6 +61,40 @@ port.on('open', () => {
   lastRxTime = Date.now();
   disconnectedNotified = false;
 });
+
+function checksum(s: string): string {
+  let c = 0;
+  for (let i = 0; i < s.length; i++) c ^= s.charCodeAt(i);
+  return c.toString(16).toUpperCase().padStart(2, '0');
+}
+
+function startTestSend(totalPackets: number) {
+  let sent = 0;
+  const startTime = Date.now();
+
+  const timer = setInterval(() => {
+    if (sent >= totalPackets) {
+      clearInterval(timer);
+      const elapsed = (Date.now() - startTime) / 1000;
+      console.log(`\n[TestSend] Complete: ${sent} packets in ${elapsed.toFixed(1)}s`);
+      port.close();
+      return;
+    }
+
+    const payload = `S:${sent}`;
+    const chk = checksum(payload);
+    const line = `${payload}:${chk}\r\n`;
+    port.write(line, (err) => {
+      if (err) console.error(`[TestSend] Write error: ${err.message}`);
+    });
+
+    if (sent % 1000 === 0) {
+      console.log(`[TestSend] ${sent}/${totalPackets} (${(sent / totalPackets * 100).toFixed(1)}%)`);
+    }
+
+    sent++;
+  }, 100);
+}
 
 parser.on('data', (data: string) => {
   lastRxTime = Date.now();
@@ -62,6 +104,8 @@ parser.on('data', (data: string) => {
     port.write('HB\r\n');
     return;
   }
+
+  if (testSend) return;
 
   const line = formatData(data);
   process.stdout.write(`\x1b[32m[RX]\x1b[0m ${line}\n`);
@@ -73,7 +117,7 @@ port.on('error', (err) => {
 
 port.on('close', () => {
   console.log('\n[TestClient] Port closed');
-  process.exit(0);
+  if (!testSend) process.exit(0);
 });
 
 port.open((err) => {
@@ -92,70 +136,72 @@ setInterval(() => {
   }
 }, 1000);
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-  prompt: '\x1b[36m[TX]\x1b[0m ',
-});
-
-rl.prompt();
-
-rl.on('line', (line) => {
-  const trimmed = line.trim();
-
-  if (trimmed === '/hex') {
-    hexMode = !hexMode;
-    console.log(`[TestClient] Mode: ${hexMode ? 'HEX' : 'TEXT'}`);
-    rl.prompt();
-    return;
-  }
-
-  if (trimmed === '/help') {
-    console.log('');
-    console.log('Commands:');
-    console.log('  /hex    Toggle hex/text display mode');
-    console.log('  /help   Show this help');
-    console.log('  /close  Close the serial port and exit');
-    console.log('');
-    rl.prompt();
-    return;
-  }
-
-  if (trimmed === '/close') {
-    port.close();
-    return;
-  }
-
-  if (!trimmed) {
-    rl.prompt();
-    return;
-  }
-
-  let data = trimmed;
-
-  if (hexMode) {
-    const hex = trimmed.replace(/\s+/g, '');
-    data = Buffer.from(hex, 'hex').toString('utf-8');
-    if (!data) {
-      console.log('[TestClient] Invalid hex input');
-      rl.prompt();
-      return;
-    }
-  }
-
-  port.write(data + '\n', (err) => {
-    if (err) {
-      console.error(`\x1b[31m[ERROR]\x1b[0m Write failed: ${err.message}`);
-    }
+if (!testSend) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: '\x1b[36m[TX]\x1b[0m ',
   });
 
   rl.prompt();
-});
 
-rl.on('SIGINT', () => {
-  console.log('\n[TestClient] Closing...');
-  port.close();
-});
+  rl.on('line', (line) => {
+    const trimmed = line.trim();
+
+    if (trimmed === '/hex') {
+      hexMode = !hexMode;
+      console.log(`[TestClient] Mode: ${hexMode ? 'HEX' : 'TEXT'}`);
+      rl.prompt();
+      return;
+    }
+
+    if (trimmed === '/help') {
+      console.log('');
+      console.log('Commands:');
+      console.log('  /hex    Toggle hex/text display mode');
+      console.log('  /help   Show this help');
+      console.log('  /close  Close the serial port and exit');
+      console.log('');
+      rl.prompt();
+      return;
+    }
+
+    if (trimmed === '/close') {
+      port.close();
+      return;
+    }
+
+    if (!trimmed) {
+      rl.prompt();
+      return;
+    }
+
+    let data = trimmed;
+
+    if (hexMode) {
+      const hex = trimmed.replace(/\s+/g, '');
+      data = Buffer.from(hex, 'hex').toString('utf-8');
+      if (!data) {
+        console.log('[TestClient] Invalid hex input');
+        rl.prompt();
+        return;
+      }
+    }
+
+    port.write(data + '\n', (err) => {
+      if (err) {
+        console.error(`\x1b[31m[ERROR]\x1b[0m Write failed: ${err.message}`);
+      }
+    });
+
+    rl.prompt();
+  });
+
+  rl.on('SIGINT', () => {
+    console.log('\n[TestClient] Closing...');
+    port.close();
+  });
+}
 
 process.on('uncaughtException', (err) => {
   console.error(`\x1b[31m[FATAL]\x1b[0m ${err.message}`);

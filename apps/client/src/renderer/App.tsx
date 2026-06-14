@@ -644,7 +644,7 @@ function App() {
               }
             }}>
             <option value="">— Select —</option>
-            {availablePorts.filter(p => !p.manufacturer?.startsWith('vUART:')).map(p => (
+            {availablePorts.map(p => (
               <option key={p.path} value={p.path}>{p.path}{p.manufacturer ? ` (${p.manufacturer})` : ''}</option>
             ))}
             <option value="__custom__">Custom</option>
