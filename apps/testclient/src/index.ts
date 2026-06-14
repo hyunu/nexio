@@ -21,8 +21,6 @@ const portPath = args[0];
 const baudRate = parseInt(args[1] || '19200', 10);
 let hexMode = false;
 
-const UART_HB_IDLE_MS = 2000;
-const UART_HB_INTERVAL_MS = 1000;
 const UART_HB_TIMEOUT_MS = 10000;
 
 const port = new SerialPort({
@@ -34,7 +32,6 @@ const port = new SerialPort({
 const parser = port.pipe(new ReadlineParser({ delimiter: '\r\n' }));
 
 let lastRxTime = 0;
-let lastHbTime = 0;
 let disconnectedNotified = false;
 
 function formatData(data: string): string {
@@ -62,6 +59,7 @@ parser.on('data', (data: string) => {
   disconnectedNotified = false;
 
   if (isHeartbeat(data)) {
+    port.write('HB\r\n');
     return;
   }
 
@@ -92,12 +90,7 @@ setInterval(() => {
     disconnectedNotified = true;
     console.log(`\x1b[31m[TestClient] Product disconnected (no data for ${UART_HB_TIMEOUT_MS / 1000}s)\x1b[0m`);
   }
-
-  if (lastRxTime > 0 && now - lastRxTime > UART_HB_IDLE_MS && now - lastHbTime > UART_HB_INTERVAL_MS) {
-    lastHbTime = now;
-    port.write('HB\r\n');
-  }
-}, 500);
+}, 1000);
 
 const rl = readline.createInterface({
   input: process.stdin,

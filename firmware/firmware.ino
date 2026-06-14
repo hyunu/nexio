@@ -616,6 +616,11 @@ static void wsToUart(const char* payload, size_t len) {
 static void uartHeartbeat() {
   unsigned long now = millis();
 
+  // UART FIFO에 미처리 데이터가 있으면 연결 유지 신호로 간주
+  if (Serial1.available()) {
+    gLastUartRxTime = now;
+  }
+
   // 2초 이상 RX 없음 → HB 전송
   if (now - gLastUartRxTime > UART_HB_INTERVAL &&
       now - gLastUartHbTime > UART_HB_INTERVAL) {
