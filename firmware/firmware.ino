@@ -310,6 +310,11 @@ static void sendLog(const char* level, const char* message) {
 static void startBLEAdvertising() {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
 
+  // stop()을 먼저 호출: NimBLE의 내부 m_isAdvertising 플래그를 리셋해야
+  // 이후 start()가 실제로 동작합니다. start()는 m_isAdvertising=true면 no-op입니다.
+  // 연결 중(phone connected)에는 stop()이 실패하지만 무방함 — 연결 해제 후 재호출됨.
+  adv->stop();
+
   // Manufacturer data: 회사 ID(0x02D5) + 상태 플래그
   uint8_t mfg[5] = {
     (uint8_t)(0x02D5 & 0xFF),
@@ -328,7 +333,7 @@ static void startBLEAdvertising() {
     gBleAdvertising = true;
   }
 
-  // start()를 항상 호출하여 변경된 manufacturer data를 BLE 컨트롤러에 반영
+  // start()로 변경된 manufacturer data를 BLE 컨트롤러에 반영
   adv->start();
   bleNotify("[BLE] Advertising started");
 }
