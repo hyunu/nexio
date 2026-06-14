@@ -118,6 +118,7 @@ class SvrCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
     Serial.println("[BLE] Connected");
     gBleConnected = true;
+    gBleAdvertising = false;
   }
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override {
     Serial.println("[BLE] Disconnected");
