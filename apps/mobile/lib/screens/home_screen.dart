@@ -138,67 +138,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) _startScan();
   }
 
-  Future<void> _showServerSettings() async {
-    final controller = TextEditingController(text: _savedServerUrl ?? 'http://192.168.0.142:10008');
-    final cs = Theme.of(context).colorScheme;
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: cs.primaryContainer,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(Icons.dns_outlined, size: 20, color: cs.onPrimaryContainer),
-            ),
-            const SizedBox(width: 12),
-            const Text('Server URL'),
-          ],
-        ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: TextStyle(fontSize: 14, fontFamily: 'monospace', color: cs.onSurface),
-          decoration: InputDecoration(
-            hintText: 'http://192.168.0.9:10008',
-            hintStyle: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.4), fontSize: 13),
-            filled: true,
-            fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.5),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide.none,
-            ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: TextStyle(color: cs.onSurfaceVariant)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, controller.text),
-            style: FilledButton.styleFrom(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    if (result != null && result.isNotEmpty) {
-      await _storageService.setServerUrl(result);
-      setState(() {
-        _savedServerUrl = result;
-      });
-    }
-  }
-
   Widget _buildRssiIndicator(int rssi) {
     final int bars;
     final Color barColor;
@@ -337,12 +276,6 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Nexio Setup'),
         backgroundColor: cs.surfaceContainerHighest,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: _showServerSettings,
-          ),
-        ],
       ),
       body: Column(
         children: [

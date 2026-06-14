@@ -30,39 +30,20 @@ class ConfigScreen extends StatefulWidget {
   State<ConfigScreen> createState() => _ConfigScreenState();
 }
 
-class _DeviceButton extends StatelessWidget {
-  const _DeviceButton({
-    required this.enabled,
-    required this.onPressed,
-    required this.icon,
-    required this.label,
-    required this.color,
-  });
-
-  final bool enabled;
-  final VoidCallback onPressed;
+class _MenuRow extends StatelessWidget {
   final IconData icon;
   final String label;
-  final MaterialColor color;
+  const _MenuRow({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    return Opacity(
-      opacity: enabled ? 1.0 : 0.35,
-      child: AbsorbPointer(
-        absorbing: !enabled,
-        child: OutlinedButton.icon(
-          onPressed: onPressed,
-          icon: Icon(icon, size: 18),
-          label: Text(label),
-          style: OutlinedButton.styleFrom(
-            foregroundColor: color.shade700,
-            side: BorderSide(color: color.shade300),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            padding: const EdgeInsets.symmetric(vertical: 12),
-          ),
-        ),
-      ),
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: cs.onSurfaceVariant),
+        const SizedBox(width: 12),
+        Text(label, style: TextStyle(fontSize: 14, color: cs.onSurface)),
+      ],
     );
   }
 }
@@ -179,18 +160,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
     setState(() {
       _ssidController.text = ssid;
       _passwordController.text = pw;
-    });
-  }
-
-  Future<void> _deleteProfile(String ssid) async {
-    await _storageService.deleteWifiProfile(ssid);
-    if (!mounted) return;
-    setState(() {
-      _wifiProfiles.remove(ssid);
-      if (_ssidController.text == ssid) {
-        _ssidController.text = '';
-        _passwordController.text = '';
-      }
     });
   }
 
@@ -419,6 +388,102 @@ class _ConfigScreenState extends State<ConfigScreen> {
     super.dispose();
   }
 
+  void _showServerSettings() {
+    final controller = TextEditingController(text: widget.serverUrl);
+    final cs = Theme.of(context).colorScheme;
+    showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Container(
+              width: 36, height: 36,
+              decoration: BoxDecoration(color: cs.primaryContainer, borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.dns_outlined, size: 20, color: cs.onPrimaryContainer),
+            ),
+            const SizedBox(width: 12),
+            const Text('Server URL'),
+          ],
+        ),
+        content: SizedBox(
+          width: 320,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            style: TextStyle(fontSize: 14, fontFamily: 'monospace', color: cs.onSurface),
+            decoration: InputDecoration(
+              hintText: 'http://192.168.0.9:10008',
+              hintStyle: TextStyle(color: cs.onSurfaceVariant.withValues(alpha: 0.4), fontSize: 13),
+              filled: true,
+              fillColor: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text('Cancel', style: TextStyle(color: cs.onSurfaceVariant))),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            style: FilledButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeviceInfo() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: cs.onSurfaceVariant.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(2)))),
+              const SizedBox(height: 12),
+              Text('Device Info', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface)),
+              const SizedBox(height: 10),
+              _buildCompactInfoRow(cs, widget.device.remoteId.str, _wifiMac),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(color: cs.surfaceContainerLow, borderRadius: BorderRadius.circular(10)),
+                child: Row(
+                  children: [
+                    Icon(Icons.dns_outlined, size: 14, color: cs.onSurfaceVariant),
+                    const SizedBox(width: 6),
+                    Expanded(child: Text(widget.serverUrl, style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: cs.onSurface), overflow: TextOverflow.ellipsis)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  style: OutlinedButton.styleFrom(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -428,6 +493,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
       appBar: AppBar(
         title: const Text('Configure Module'),
         backgroundColor: cs.surfaceContainerHighest,
+        actions: [
+          PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: cs.onSurface),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            elevation: 2,
+            onSelected: (v) {
+              if (v == 'info') _showDeviceInfo();
+              if (v == 'server') _showServerSettings();
+              if (v == 'reset') _sendCommand('RESET');
+              if (v == 'discard') _sendCommand('DISCARD');
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'info', child: _MenuRow(icon: Icons.info_outline, label: 'Device Info')),
+              const PopupMenuItem(value: 'server', child: _MenuRow(icon: Icons.dns_outlined, label: 'Server')),
+              PopupMenuDivider(height: 8),
+              const PopupMenuItem(value: 'reset', child: _MenuRow(icon: Icons.restart_alt, label: 'Reset')),
+              const PopupMenuItem(value: 'discard', child: _MenuRow(icon: Icons.factory_outlined, label: 'Discard')),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -444,11 +529,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
                     const SizedBox(height: 16),
                     _buildSendButton(cs),
                   ],
-                  if (_statusMessage != null && _stage == OnboardingStage.form)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: _buildStatusCard(cs),
-                    ),
                   if (showLogPanel) ...[
                     if (_statusMessage != null) _buildStatusCard(cs),
                     const SizedBox(height: 12),
@@ -463,126 +543,98 @@ class _ConfigScreenState extends State<ConfigScreen> {
               ),
             ),
           ),
-          if (_stage == OnboardingStage.form)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-              child: _buildDeviceControls(cs),
-            ),
         ],
       ),
     );
   }
 
   Widget _buildDeviceInfoCard(ColorScheme cs) {
-    final bleUuid = widget.device.remoteId.str;
-
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
         color: cs.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40, height: 40,
+            decoration: BoxDecoration(
+              color: cs.primaryContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.bluetooth, size: 20, color: cs.onPrimaryContainer),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface),
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: _isConnected ? Colors.green.withValues(alpha: 0.1) : Colors.orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(width: 5, height: 5, decoration: BoxDecoration(color: _isConnected ? Colors.green : Colors.orange, shape: BoxShape.circle)),
+                const SizedBox(width: 4),
+                Text(
+                  _isConnected ? 'Connected' : 'Connecting...',
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: _isConnected ? Colors.green.shade700 : Colors.orange.shade700),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactInfoRow(ColorScheme cs, String bleUuid, String? wifiMac) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: cs.primaryContainer,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.bluetooth, size: 22, color: cs.onPrimaryContainer),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
-                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _isConnected ? Colors.green.withValues(alpha: 0.1) : Colors.orange.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 6, height: 6,
-                      decoration: BoxDecoration(
-                        color: _isConnected ? Colors.green : Colors.orange,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _isConnected ? 'Connected' : 'Connecting...',
-                      style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w500,
-                        color: _isConnected ? Colors.green.shade700 : Colors.orange.shade700,
-                      ),
-                    ),
-                  ],
-                ),
+              SizedBox(width: 64, child: Text('BLE UUID', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant.withValues(alpha: 0.5)))),
+              Expanded(child: Text(bleUuid, style: TextStyle(fontSize: 13, fontFamily: 'monospace', color: cs.onSurface), overflow: TextOverflow.ellipsis)),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: bleUuid));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('BLE UUID copied'), duration: Duration(seconds: 1), behavior: SnackBarBehavior.floating));
+                },
+                child: Padding(padding: const EdgeInsets.only(left: 4), child: Icon(Icons.copy_rounded, size: 16, color: cs.primary)),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          _buildInfoRow(cs, 'BLE UUID', bleUuid, Icons.copy_rounded),
-          const SizedBox(height: 6),
-          _buildInfoRow(cs, 'WiFi MAC', _wifiMac ?? 'Loading...', Icons.copy_rounded),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              SizedBox(width: 64, child: Text('WiFi MAC', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant.withValues(alpha: 0.5)))),
+              Expanded(child: Text(wifiMac ?? 'Loading...', style: TextStyle(fontSize: 13, fontFamily: 'monospace', color: cs.onSurface), overflow: TextOverflow.ellipsis)),
+              if (wifiMac != null)
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: wifiMac));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('WiFi MAC copied'), duration: Duration(seconds: 1), behavior: SnackBarBehavior.floating));
+                  },
+                  child: Padding(padding: const EdgeInsets.only(left: 4), child: Icon(Icons.copy_rounded, size: 16, color: cs.primary)),
+                ),
+            ],
+          ),
         ],
       ),
-    );
-  }
-
-  Widget _buildInfoRow(ColorScheme cs, String label, String value, IconData copyIcon) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 72,
-          child: Text(
-            label,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant.withValues(alpha: 0.6)),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: cs.onSurface),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        SizedBox(
-          width: 32, height: 32,
-          child: IconButton(
-            padding: EdgeInsets.zero,
-            icon: Icon(copyIcon, size: 16, color: cs.primary),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('$label copied', style: const TextStyle(fontSize: 13)),
-                  duration: const Duration(seconds: 2),
-                  behavior: SnackBarBehavior.floating,
-                  margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
     );
   }
 
@@ -591,78 +643,27 @@ class _ConfigScreenState extends State<ConfigScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Saved Networks',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Text('Saved Networks', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500, color: cs.onSurfaceVariant)),
         ),
-        const SizedBox(height: 8),
         Wrap(
           spacing: 6,
-          runSpacing: 6,
+          runSpacing: 4,
           children: entries.map((e) {
             final active = _ssidController.text == e.key;
-            return Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(20),
-                onTap: () => _selectProfile(e.key),
-                child: Container(
-                  padding: const EdgeInsets.only(left: 12, right: 4, top: 4, bottom: 4),
-                  decoration: BoxDecoration(
-                    color: active ? cs.primaryContainer : cs.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(20),
-                    border: active ? Border.all(color: cs.primary, width: 1.5) : null,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.wifi, size: 14, color: active ? cs.onPrimaryContainer : cs.onSurfaceVariant),
-                      const SizedBox(width: 4),
-                      Text(
-                        e.key,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                          color: active ? cs.onPrimaryContainer : cs.onSurface,
-                        ),
-                      ),
-                      const SizedBox(width: 2),
-                      InkWell(
-                        borderRadius: BorderRadius.circular(10),
-                        onTap: () => _confirmDeleteProfile(e.key),
-                        child: Padding(
-                          padding: const EdgeInsets.all(4),
-                          child: Icon(Icons.close, size: 14, color: cs.onSurfaceVariant),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+            return ActionChip(
+              avatar: Icon(Icons.wifi, size: 14, color: active ? cs.onPrimaryContainer : cs.onSurfaceVariant),
+              label: Text(e.key, style: TextStyle(fontSize: 12, color: active ? cs.onPrimaryContainer : cs.onSurface)),
+              onPressed: () => _selectProfile(e.key),
+              backgroundColor: active ? cs.primaryContainer : cs.surfaceContainerHighest,
+              side: active ? BorderSide(color: cs.primary, width: 1) : BorderSide.none,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              padding: const EdgeInsets.symmetric(horizontal: 2),
             );
           }).toList(),
         ),
       ],
-    );
-  }
-
-  void _confirmDeleteProfile(String ssid) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Delete Profile'),
-        content: Text('Delete "$ssid" profile?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _deleteProfile(ssid);
-            },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -728,31 +729,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: cs.tertiaryContainer.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.dns_outlined, size: 14, color: cs.onTertiaryContainer),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  widget.serverUrl,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'monospace',
-                    color: cs.onTertiaryContainer,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 16),
         Text(
           'Serial Baud Rate',
@@ -801,48 +777,6 @@ class _ConfigScreenState extends State<ConfigScreen> {
           textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ),
-    );
-  }
-
-  Widget _buildDeviceControls(ColorScheme cs) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            const Expanded(child: Divider()),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text('Device Controls', style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant.withValues(alpha: 0.6))),
-            ),
-            const Expanded(child: Divider()),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _DeviceButton(
-                enabled: _isConnected && !_isConnecting,
-                onPressed: () => _sendCommand('RESET'),
-                icon: Icons.restart_alt,
-                label: 'Reset',
-                color: Colors.orange,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _DeviceButton(
-                enabled: _isConnected && !_isConnecting,
-                onPressed: () => _sendCommand('DISCARD'),
-                icon: Icons.factory_outlined,
-                label: 'Discard',
-                color: Colors.red,
-              ),
-            ),
-          ],
-        ),
-      ],
     );
   }
 
