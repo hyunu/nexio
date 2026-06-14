@@ -49,6 +49,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _devices = [];
     });
 
+    await _waitForBluetooth();
+
     _scanSubscription?.cancel();
     try {
       await FlutterBluePlus.stopScan();
@@ -88,6 +90,12 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _isScanning = false;
     });
+  }
+
+  Future<void> _waitForBluetooth() async {
+    try {
+      await FlutterBluePlus.adapterState.where((s) => s == BluetoothAdapterState.on).first;
+    } catch (_) {}
   }
 
   static const _stateColors = {
