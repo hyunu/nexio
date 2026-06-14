@@ -20,7 +20,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isScanning = false;
   String? _savedServerUrl;
   StreamSubscription? _scanSubscription;
-  Timer? _scanRestartTimer;
 
   @override
   void initState() {
@@ -31,7 +30,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _scanRestartTimer?.cancel();
     _scanSubscription?.cancel();
     _bleScanner.stopScan();
     super.dispose();
@@ -48,7 +46,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() {
       _isScanning = true;
-      _devices = [];
     });
 
     await _waitForBluetooth();
@@ -83,11 +80,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() => _isScanning = false);
       }
-      return;
     }
-
-    _scanRestartTimer?.cancel();
-    _scanRestartTimer = Timer(const Duration(seconds: 8), _startScan);
   }
 
   Future<void> _waitForBluetooth() async {
