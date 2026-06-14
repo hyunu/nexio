@@ -15,6 +15,7 @@ interface BoardDetail {
   board: {
     uniqueId: string;
     macAddress: string;
+    wifiMac?: string;
     status: string;
     firmwareVersion: string;
     connectedAt: string;
@@ -117,8 +118,10 @@ export default function BoardConsole({ boardId, onClose }: { boardId: string; on
             </span>
           )}
           {detail && (
-            <span style={{ fontSize: 13, color: '#94a3b8' }}>
-              <span style={{ color: '#64748b' }}>MAC</span> {detail.board.macAddress || '-'}
+              <span style={{ fontSize: 13, color: '#94a3b8' }}>
+              <span style={{ color: '#64748b' }}>BLE</span> {detail.board.macAddress || '-'}
+              <span style={{ margin: '0 8px', color: '#475569' }}>|</span>
+              <span style={{ color: '#64748b' }}>WiFi</span> {detail.board.wifiMac || '-'}
               <span style={{ margin: '0 8px', color: '#475569' }}>|</span>
               <span style={{ color: '#64748b' }}>상태</span>{' '}
               <span style={{ color: '#fff', fontWeight: 500 }}>{statusLabel[detail.board.status] || detail.board.status}</span>

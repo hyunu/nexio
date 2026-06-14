@@ -15,6 +15,7 @@ interface Board {
   id: string;
   uniqueId: string;
   macAddress: string;
+  wifiMac?: string;
   status: string;
   connectedAt: string;
   updatedAt: string;
@@ -273,6 +274,7 @@ function App() {
                           <th style={thStyle}>고유 ID</th>
                           <th style={thStyle}>상태</th>
                           <th style={thStyle}>연결상태</th>
+                          <th style={thStyle}>MAC 주소</th>
                           <th style={thStyle}>설치장소</th>
                           <th style={thStyle}>연결 시간</th>
                           <th style={thStyle}>작업</th>
@@ -299,6 +301,9 @@ function App() {
                                 </span>
                               </div>
                             </td>
+                            <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: '#6b7280' }}>
+                              {board.wifiMac || '-'}
+                            </td>
                             <td style={tdStyle}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <input
@@ -322,7 +327,7 @@ function App() {
                               </div>
                             </td>
                             <td style={{ ...tdStyle, color: '#6b7280' }}>
-                              {new Date(board.connectedAt).toLocaleString()}
+                              {(() => { const d = new Date(board.connectedAt); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`; })()}
                             </td>
                             <td style={{ ...tdStyle, textAlign: 'right' }}>
                               <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
@@ -342,7 +347,7 @@ function App() {
                           </tr>
                         ))}
                           {boards.length === 0 && (
-                          <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>릴레이 모듈이 없습니다</td></tr>
+                          <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: '#9ca3af', padding: 32 }}>릴레이 모듈이 없습니다</td></tr>
                         )}
                       </tbody>
                     </table>

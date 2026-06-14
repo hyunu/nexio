@@ -11,6 +11,7 @@ model Board {
   id           String    @id @default(uuid())
   uniqueId     String    @unique
   macAddress   String?  @unique
+  wifiMac      String?
   status       String    @default("OFFLINE")
   firmwareVersion String?
   displayAvailable Boolean @default(true)

@@ -1,16 +1,19 @@
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 import * as readline from 'readline';
+import * as fs from 'fs';
 
 const args = process.argv.slice(2);
 const testSend = args.includes('--test-send');
 const testSendIdx = args.indexOf('--test-send');
 const testDuration = testSend ? parseInt(args[testSendIdx + 1] || '60', 10) : 0;
+const outputIdx = args.indexOf('--output');
+const outputPath = outputIdx >= 0 ? args[outputIdx + 1] : '';
 
 if (args.length < 1 && !testSend) {
   console.error('Usage:');
-  console.error('  testclient <port-path> [baud-rate]');
-  console.error('  testclient <port-path> [baud-rate] --test-send [minutes]');
+  console.error('  testclient <port-path> [baud-rate] [--output <file>]');
+  console.error('  testclient <port-path> [baud-rate] --test-send [minutes] [--output <file>]');
   console.error('');
   console.error('Sends sequenced test packets every 100ms to verify no loss/corruption.');
   console.error('Connect test-verify to ws://host:10008/ws/monitor to check results.');
@@ -19,6 +22,12 @@ if (args.length < 1 && !testSend) {
 
 const portPath = args[0];
 const baudRate = parseInt(args[1] || '19200', 10);
+
+function logOutput(data: string) {
+  if (!outputPath) return;
+  const ts = new Date().toISOString();
+  fs.appendFileSync(outputPath, `[${ts}] ${data}\n`);
+}
 let hexMode = false;
 
 const UART_HB_TIMEOUT_MS = 10000;
@@ -105,6 +114,8 @@ parser.on('data', (data: string) => {
     return;
   }
 
+  logOutput(data);
+
   if (testSend) return;
 
   const line = formatData(data);
@@ -133,6 +144,7 @@ setInterval(() => {
   if (lastRxTime > 0 && now - lastRxTime > UART_HB_TIMEOUT_MS && !disconnectedNotified) {
     disconnectedNotified = true;
     console.log(`\x1b[31m[TestClient] Product disconnected (no data for ${UART_HB_TIMEOUT_MS / 1000}s)\x1b[0m`);
+    logOutput(`[EVENT] Product disconnected (no data for ${UART_HB_TIMEOUT_MS / 1000}s)`);
   }
 }, 1000);
 

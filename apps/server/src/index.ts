@@ -478,13 +478,13 @@ async function start() {
           });
           await prisma.board.update({
             where: { id: claimed.id },
-            data: { firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
+            data: { firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date(), wifiMac: macAddr },
           });
         }
         if (!claimed) {
           uniqueId = preAssignedId;
           await prisma.board.create({
-            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
+            data: { uniqueId, macAddress: macAddr, wifiMac: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
           });
         }
       } else {
@@ -493,7 +493,7 @@ async function start() {
           uniqueId = existingBoard.uniqueId;
           await prisma.board.update({
             where: { id: existingBoard.id },
-            data: { macAddress: macAddr, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
+            data: { macAddress: macAddr, wifiMac: macAddr, productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
           });
         }
         if (!existingBoard) {
@@ -504,7 +504,7 @@ async function start() {
           const nextNum = lastBoard ? parseInt(lastBoard.uniqueId, 10) + 1 : 1;
           uniqueId = `${String(nextNum).padStart(4, '0')}`;
           await prisma.board.create({
-            data: { uniqueId, macAddress: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
+            data: { uniqueId, macAddress: macAddr, wifiMac: macAddr, firmwareVersion, displayAvailable, productConnected: productConnected ?? false, status: 'IDLE' },
           });
         }
       }
@@ -846,6 +846,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
             productConnected: productConnected ?? false,
             status: 'IDLE',
             connectedAt: new Date(),
+            wifiMac: boardId,
           },
         });
       }
@@ -855,6 +856,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
           data: {
             uniqueId,
             macAddress: boardId,
+            wifiMac: boardId,
             firmwareVersion,
             displayAvailable,
             productConnected: productConnected ?? false,
@@ -874,7 +876,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
           uniqueId = existingBoard.uniqueId;
           await prisma.board.update({
             where: { id: existingBoard.id },
-            data: { productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date() },
+            data: { productConnected: productConnected ?? false, status: 'IDLE', connectedAt: new Date(), wifiMac: boardId },
           });
         }
       }
@@ -889,6 +891,7 @@ async function handleBoardMessage(ws: WebSocket, msg: any, setBoardId: (id: stri
           data: {
             uniqueId,
             macAddress: boardId,
+            wifiMac: boardId,
             firmwareVersion,
             displayAvailable,
             productConnected: productConnected ?? false,

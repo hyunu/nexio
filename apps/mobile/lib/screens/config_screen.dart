@@ -414,7 +414,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Configure WiFi'),
+        title: const Text('Configure Module'),
         backgroundColor: cs.surfaceContainerHighest,
       ),
       body: Column(
