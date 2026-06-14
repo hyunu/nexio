@@ -304,18 +304,10 @@ static void sendLog(const char* level, const char* message) {
 }
 
 //-----------------------------------------------------------------------------
-// startBLEAdvertising: BLE 광고 시작
+// startBLEAdvertising: BLE 광고 시작/갱신
 //-----------------------------------------------------------------------------
 static void startBLEAdvertising() {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-  adv->stop();
-
-  char name[48];
-  if (gUniqueId[0])
-    snprintf(name, sizeof(name), "Nexio-%s", gUniqueId);
-  else
-    strncpy(name, "Nexio", sizeof(name) - 1);
-  NimBLEDevice::setDeviceName(name);
 
   // Manufacturer data: 회사 ID(0x02D5) + 상태 플래그
   uint8_t mfg[5] = {
@@ -324,9 +316,18 @@ static void startBLEAdvertising() {
     gStatusFlags, 0x00, 0x00
   };
   adv->setManufacturerData(mfg, 5);
-  adv->start();
-  gBleAdvertising = true;
-  bleNotify("[BLE] Advertising started");
+
+  if (!gBleAdvertising) {
+    char name[48];
+    if (gUniqueId[0])
+      snprintf(name, sizeof(name), "Nexio-%s", gUniqueId);
+    else
+      strncpy(name, "Nexio", sizeof(name) - 1);
+    NimBLEDevice::setDeviceName(name);
+    adv->start();
+    gBleAdvertising = true;
+    bleNotify("[BLE] Advertising started");
+  }
 }
 
 //-----------------------------------------------------------------------------
