@@ -70,7 +70,7 @@ class BleScanner {
     _discoveryInProgress = null;
   }
 
-  Future<void> startScan({Duration timeout = const Duration(seconds: 10)}) async {
+  Future<void> startScan({Duration? timeout}) async {
     _fbpSubscription?.cancel();
 
     await FlutterBluePlus.startScan(

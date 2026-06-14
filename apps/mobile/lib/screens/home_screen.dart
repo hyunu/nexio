@@ -74,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      await _bleScanner.startScan(timeout: const Duration(seconds: 10));
+      await _bleScanner.startScan();
     } catch (e) {
       debugPrint('Scan start failed: $e');
       _scanSubscription?.cancel();
@@ -83,13 +83,6 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       return;
     }
-
-    await Future.delayed(const Duration(seconds: 10));
-
-    if (!mounted) return;
-    setState(() {
-      _isScanning = false;
-    });
   }
 
   Future<void> _waitForBluetooth() async {
