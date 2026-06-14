@@ -20,6 +20,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isScanning = false;
   String? _savedServerUrl;
   StreamSubscription? _scanSubscription;
+  Timer? _scanRefreshTimer;
 
   @override
   void initState() {
@@ -30,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _scanRefreshTimer?.cancel();
     _scanSubscription?.cancel();
     _bleScanner.stopScan();
     super.dispose();
@@ -46,10 +48,12 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() {
       _isScanning = true;
+      _devices = [];
     });
 
     await _waitForBluetooth();
 
+    _scanRefreshTimer?.cancel();
     _scanSubscription?.cancel();
     try {
       await FlutterBluePlus.stopScan();
@@ -80,7 +84,17 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() => _isScanning = false);
       }
+      return;
     }
+
+    _scanRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _refreshScan());
+  }
+
+  Future<void> _refreshScan() async {
+    try {
+      await FlutterBluePlus.stopScan();
+      await _bleScanner.startScan();
+    } catch (_) {}
   }
 
   Future<void> _waitForBluetooth() async {
