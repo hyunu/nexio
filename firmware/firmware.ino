@@ -341,10 +341,8 @@ static void updateStatusFlags() {
   if (gRegistered)     f |= 0x02;
   if (gWifiConnected)  f |= 0x04;
   if (gOnboarded)      f |= 0x08;
-  if (f != gStatusFlags) {
-    gStatusFlags = f;
-    if (gBleAdvertising) startBLEAdvertising();
-  }
+  gStatusFlags = f;
+  if (gBleAdvertising) startBLEAdvertising();
 }
 
 
@@ -438,6 +436,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
       gRegistered     = false;
       gLastRegister   = 0;
       gLastServerMsg  = 0;
+      updateStatusFlags();
       break;
 
     case WStype_DISCONNECTED:
@@ -448,6 +447,7 @@ static void wsEvent(WStype_t type, uint8_t* payload, size_t length) {
       gWsConnected    = false;
       gRegistered     = false;
       gWsConnectStart = millis();
+      updateStatusFlags();
       break;
 
     case WStype_TEXT: {
