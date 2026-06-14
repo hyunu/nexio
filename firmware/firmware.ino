@@ -786,6 +786,7 @@ void setup() {
     pMacChar->setValue(mac.c_str());
   }
 
+  updateStatusFlags();
   startBLEAdvertising();
 
 #ifdef USE_OLED
