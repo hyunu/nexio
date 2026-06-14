@@ -325,10 +325,12 @@ static void startBLEAdvertising() {
     else
       strncpy(name, "Nexio", sizeof(name) - 1);
     NimBLEDevice::setDeviceName(name);
-    adv->start();
     gBleAdvertising = true;
-    bleNotify("[BLE] Advertising started");
   }
+
+  // start()를 항상 호출하여 변경된 manufacturer data를 BLE 컨트롤러에 반영
+  adv->start();
+  bleNotify("[BLE] Advertising started");
 }
 
 //-----------------------------------------------------------------------------
