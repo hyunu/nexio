@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../ble/ble_scanner.dart';
 import '../services/storage_service.dart';
@@ -78,6 +79,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
   bool _isConnecting = false;
   bool _isConnected = false;
   String? _statusMessage;
+  String? _wifiMac;
   OnboardingStage _stage = OnboardingStage.form;
   Map<String, String> _wifiProfiles = {};
   Timer? _pollTimer;
@@ -113,10 +115,20 @@ class _ConfigScreenState extends State<ConfigScreen> {
         _statusMessage = 'Connected. Enter WiFi details.';
       });
       _subscribeToBleLogs();
+      _readWifiMac();
     } catch (e) {
       setState(() {
         _isConnected = false;
         _statusMessage = 'Connection failed: $e';
+      });
+    }
+  }
+
+  Future<void> _readWifiMac() async {
+    final mac = await _bleScanner.readWifiMac(widget.device);
+    if (mounted) {
+      setState(() {
+        _wifiMac = mac;
       });
     }
   }
@@ -462,73 +474,115 @@ class _ConfigScreenState extends State<ConfigScreen> {
   }
 
   Widget _buildDeviceInfoCard(ColorScheme cs) {
+    final bleUuid = widget.device.remoteId.str;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: cs.surfaceContainerLow,
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: cs.primaryContainer,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(Icons.bluetooth, size: 24, color: cs.onPrimaryContainer),
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.bluetooth, size: 22, color: cs.onPrimaryContainer),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _isConnected ? Colors.green.withValues(alpha: 0.1) : Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(
+                        color: _isConnected ? Colors.green : Colors.orange,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      _isConnected ? 'Connected' : 'Connecting...',
+                      style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w500,
+                        color: _isConnected ? Colors.green.shade700 : Colors.orange.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: cs.onSurface),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  widget.device.remoteId.str,
-                  style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: cs.onSurfaceVariant),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _isConnected
-                  ? Colors.green.withValues(alpha: 0.1)
-                  : Colors.orange.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: _isConnected ? Colors.green : Colors.orange,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 5),
-                Text(
-                  _isConnected ? 'Connected' : 'Connecting...',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: _isConnected ? Colors.green.shade700 : Colors.orange.shade700,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          const SizedBox(height: 12),
+          _buildInfoRow(cs, 'BLE UUID', bleUuid, Icons.copy_rounded),
+          const SizedBox(height: 6),
+          _buildInfoRow(cs, 'WiFi MAC', _wifiMac ?? 'Loading...', Icons.copy_rounded),
         ],
       ),
+    );
+  }
+
+  Widget _buildInfoRow(ColorScheme cs, String label, String value, IconData copyIcon) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 72,
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: cs.onSurfaceVariant.withValues(alpha: 0.6)),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: cs.onSurface),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        SizedBox(
+          width: 32, height: 32,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            icon: Icon(copyIcon, size: 16, color: cs.primary),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: value));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('$label copied', style: const TextStyle(fontSize: 13)),
+                  duration: const Duration(seconds: 2),
+                  behavior: SnackBarBehavior.floating,
+                  margin: const EdgeInsets.only(bottom: 80, left: 16, right: 16),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 

@@ -14,6 +14,7 @@ class BleScanner {
   static const String _serviceUuid = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const String _charWriteUuid = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
   static const String _charNotifyUuid = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+  static const String _charMacUuid = '6e400004-b5a3-f393-e0a9-e50e24dcca9e';
 
   static const int _mfgCompanyId = 0x02D5;
   static const int _flagPrd = 0x01;
@@ -109,6 +110,25 @@ class BleScanner {
       return false;
     } catch (e) {
       return false;
+    }
+  }
+
+  Future<String?> readWifiMac(BluetoothDevice device) async {
+    try {
+      final services = await discoverServices(device);
+      for (var service in services) {
+        if (service.uuid.str.toLowerCase() == _serviceUuid.toLowerCase()) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.str.toLowerCase() == _charMacUuid.toLowerCase()) {
+              final value = await characteristic.read();
+              return String.fromCharCodes(value);
+            }
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
   }
 

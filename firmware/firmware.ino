@@ -51,6 +51,7 @@ static       size_t  uartTail         = 0;                // 다음 읽기 위�
 static const char* SERVICE_UUID  = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 static const char* CHAR_TX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // 보드 → 폰 (notify)
 static const char* CHAR_RX_UUID  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";  // 폰 → 보드 (write)
+static const char* CHAR_MAC_UUID = "6e400004-b5a3-f393-e0a9-e50e24dcca9e";  // WiFi MAC 읽기
 
 // ── 온보딩 / 연결 상태 ──────────────────────────────────────────────
 static char           gUniqueId[32]       = {0};           // 서버가 할당한 ID (예: "0042")
@@ -78,6 +79,7 @@ static unsigned long  gWsConnectStart    = 0;              // gWs.begin() 호출
 
 // ── 핸들 ────────────────────────────────────────────────────────────
 static NimBLECharacteristic*  pTxChar  = nullptr;          // BLE notify 특성
+static NimBLECharacteristic*  pMacChar = nullptr;          // WiFi MAC 읽기 특성
 static WebSocketsClient       gWs;                          // WS 클라이언트 인스턴스
 static Preferences            prefs;                        // NVS 핸들
 #ifdef USE_OLED
@@ -775,6 +777,11 @@ void setup() {
     svc->createCharacteristic(CHAR_RX_UUID,
                               NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pRxChar->setCallbacks(&_rxCb);
+  pMacChar = svc->createCharacteristic(CHAR_MAC_UUID, NIMBLE_PROPERTY::READ);
+  {
+    String mac = WiFi.macAddress();
+    pMacChar->setValue(mac.c_str());
+  }
 
   startBLEAdvertising();
 
