@@ -360,11 +360,12 @@ class _ConfigScreenState extends State<ConfigScreen> {
           await Future.delayed(const Duration(milliseconds: 300));
           final serverService = ServerService(widget.serverUrl);
           await serverService.discardByMac(widget.device.remoteId.str.toUpperCase());
-          widget.device.disconnect();
-          _bleScanner.clearCache();
-          if (mounted) Navigator.pop(context);
-          return;
         }
+
+        widget.device.disconnect();
+        _bleScanner.clearCache();
+        if (mounted) Navigator.pop(context);
+        return;
       } else {
         setState(() {
           _statusMessage = 'Failed to send command';
