@@ -46,7 +46,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
     setState(() {
       _isScanning = true;
-      _devices = [];
     });
 
     await _waitForBluetooth();
@@ -81,21 +80,17 @@ class _HomeScreenState extends State<HomeScreen> {
         updatedById[r.device.remoteId.str] = r;
       }
 
-      // 보이던 순서를 유지하되 업데이트된 데이터를 덮어쓰고, 신규 항목은 뒤에 추가
-      final List<ScanResult> merged = [];
-      final existingIds = _devices.map((d) => d.device.remoteId.str).toList();
-      for (var id in existingIds) {
-        if (updatedById.containsKey(id)) {
-          merged.add(updatedById.remove(id)!);
-        }
+      // 기존 장치는 스캔 재시작 사이에도 유지 (빈 결과로 깜빡임 방지)
+      final Map<String, ScanResult> mergedById = {};
+      for (var d in _devices) {
+        mergedById[d.device.remoteId.str] = d;
       }
-      // 남은 신규 항목 추가 (RSSI 내림차순)
-      final remaining = updatedById.values.toList()
-        ..sort((a, b) => b.rssi.compareTo(a.rssi));
-      merged.addAll(remaining);
+      // 새 결과로 덮어쓰기
+      mergedById.addAll(updatedById);
 
       setState(() {
-        _devices = merged;
+        _devices = mergedById.values.toList()
+          ..sort((a, b) => b.rssi.compareTo(a.rssi));
       });
     });
 
