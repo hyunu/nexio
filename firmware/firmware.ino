@@ -420,9 +420,10 @@ static void startBLEAdvertising() {
 //-----------------------------------------------------------------------------
 static void updateStatusFlags() {
   uint8_t f = 0;
-  if (gRegistered)     f |= 0x02;
-  if (gWifiConnected)  f |= 0x04;
-  if (gOnboarded)      f |= 0x08;
+  if (gRegistered)        f |= 0x02;
+  if (gWifiConnected)     f |= 0x04;
+  if (gOnboarded)         f |= 0x08;
+  if (gProductConnected)  f |= 0x01;
   gStatusFlags = f;
   if (gBleAdvertising) startBLEAdvertising();
 }

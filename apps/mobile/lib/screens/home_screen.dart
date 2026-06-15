@@ -149,6 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context) => ConfigScreen(
           device: device.device,
           serverUrl: _savedServerUrl ?? 'http://192.168.0.142:10008',
+          mfgData: device.advertisementData.manufacturerData[0x02D5],
         ),
       ),
     );

@@ -19,11 +19,13 @@ class _LogEntry {
 class ConfigScreen extends StatefulWidget {
   final BluetoothDevice device;
   final String serverUrl;
+  final List<int>? mfgData;
 
   const ConfigScreen({
     super.key,
     required this.device,
     required this.serverUrl,
+    this.mfgData,
   });
 
   @override
@@ -550,6 +552,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
   }
 
   Widget _buildDeviceInfoCard(ColorScheme cs) {
+    final flagWidgets = <Widget>[];
+    if (widget.mfgData != null) {
+      int offset = 0;
+      if (widget.mfgData!.length >= 4 && widget.mfgData![0] == 0xD5 && widget.mfgData![1] == 0x02) {
+        offset = 2;
+      }
+      final flags = widget.mfgData![offset];
+      final wifi = (flags & 0x04) != 0;
+      final svr = (flags & 0x02) != 0;
+      final prd = (flags & 0x01) != 0;
+
+      flagWidgets.addAll([
+        _buildFlagBadge('W', wifi, Colors.blue, cs),
+        const SizedBox(width: 4),
+        _buildFlagBadge('S', svr, Colors.green, cs),
+        const SizedBox(width: 4),
+        _buildFlagBadge('P', prd, Colors.orange, cs),
+      ]);
+    }
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: BoxDecoration(
@@ -568,9 +590,19 @@ class _ConfigScreenState extends State<ConfigScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.device.platformName.isNotEmpty ? widget.device.platformName : 'Nexio Device',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cs.onSurface),
+                ),
+                if (flagWidgets.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(children: flagWidgets),
+                ],
+              ],
             ),
           ),
           Container(
@@ -592,6 +624,25 @@ class _ConfigScreenState extends State<ConfigScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildFlagBadge(String letter, bool on, Color activeColor, ColorScheme cs) {
+    return Container(
+      width: 22, height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: on ? activeColor.withValues(alpha: 0.15) : cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: on ? activeColor : cs.outlineVariant, width: 1),
+      ),
+      child: Text(
+        letter,
+        style: TextStyle(
+          fontSize: 10, fontWeight: FontWeight.w700,
+          color: on ? activeColor : cs.onSurfaceVariant.withValues(alpha: 0.4),
+        ),
       ),
     );
   }

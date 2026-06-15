@@ -43,7 +43,11 @@ class BleScanner {
       return NexioDeviceState.unconfigured;
     }
 
-    final flags = mfgData[0];
+    int offset = 0;
+    if (mfgData.length >= 4 && mfgData[0] == 0xD5 && mfgData[1] == 0x02) {
+      offset = 2;
+    }
+    final flags = mfgData[offset];
     final cfg = (flags & _flagCfg) != 0;
     final wifi = (flags & _flagWifi) != 0;
     final svr = (flags & _flagSvr) != 0;
